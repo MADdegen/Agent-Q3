@@ -343,6 +343,22 @@ async def lookup_npm(package: str) -> dict:
     return {"error": "not found", "package": package, "source": "npm"}
 
 
+
+async def jina_wikipedia(topic: str) -> list[dict]:
+    """Jina-proxied Wikipedia — bypasses Railway IP restrictions on wiki REST."""
+    result = await jina_read(f"https://en.wikipedia.org/wiki/{topic.replace(' ','_')}")
+    if "error" not in result:
+        return [{"title": topic, "extract": result.get("content","")[:1500],
+                 "url": f"https://en.wikipedia.org/wiki/{topic.replace(' ','_')}",
+                 "source": "wikipedia_jina"}]
+    return await search_wikipedia(topic)   # fallback to direct
+
+
+async def jina_duckduckgo(query: str, max_results: int = 5) -> list[dict]:
+    """Jina Search — bypasses DDG blocks on Railway shared IPs."""
+    results = await jina_search(query, max_results=max_results)
+    return results or await search_duckduckgo(query, max_results=max_results)
+
 # ─── Combined smart search dispatcher ────────────────────────────────────────
 
 async def smart_search(
