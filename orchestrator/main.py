@@ -1,4 +1,25 @@
 """
+Agent-Q3 — Dual-model orchestration API
+Tandem: Gemma4-E4B (Reasoner) + Qwen3.5-4B (Coder)
+Compute: Local Ollama → HuggingFace Router → RunPod → OpenRouter
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from contextlib import asynccontextmanager
+from typing import Any
+
+import structlog
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
+
+from .config import settings
+from .models import ChatRequest, TandemRequest
+from .router import ComputeRouter
+
 Agent-Q3 Orchestrator — Main FastAPI App
 MAD Gambit | github.com/MADdegen/Agent-Q3
 
