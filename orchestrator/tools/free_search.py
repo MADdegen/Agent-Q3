@@ -171,8 +171,7 @@ async def search_arxiv(
                     ]
                     arxiv_id = txt("atom:id").split("/abs/")[-1]
                     results.append({
-                        "title":    txt("atom:title").replace("
-","").strip(),
+                        "title":    txt("atom:title").replace("\n","").strip(),
                         "authors":  authors[:3],
                         "summary":  txt("atom:summary")[:500],
                         "url":      f"https://arxiv.org/abs/{arxiv_id}",
