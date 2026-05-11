@@ -7,6 +7,7 @@ Strategy: weighted round-robin with live health fallback
 """
 
 import time
+from enum import StrEnum
 from typing import Optional
 import httpx
 import structlog

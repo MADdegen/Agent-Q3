@@ -12,6 +12,7 @@ services:
     env_file:
       - .env
     environment:
+      PORT: "8000"  # Local dev port — Railway overrides this
       REASONER_MODEL: ${REASONER_MODEL:-gemma4:e4b-instruct-q4_K_M}
       CODER_MODEL: ${CODER_MODEL:-qwen3.5:4b-instruct-q4_K_M}
       COMPUTE_STRATEGY: ${COMPUTE_STRATEGY:-round_robin}

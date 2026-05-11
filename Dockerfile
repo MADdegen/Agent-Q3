@@ -26,12 +26,12 @@ RUN chmod +x /start.sh
 EXPOSE 11434 8000
 
 # ── Env defaults ──────────────────────────────────────────────────────────────
+# Railway provides $PORT at runtime — default to 8000 for local dev
 ENV OLLAMA_HOST=0.0.0.0 \
     OLLAMA_ORIGINS="*" \
     OLLAMA_NUM_GPU=99 \
     OLLAMA_KEEP_ALIVE=24h \
     OLLAMA_MAX_LOADED_MODELS=2 \
-    PORT=8000 \
     REASONER_MODEL=gemma4:e4b-instruct-q4_K_M \
     CODER_MODEL=qwen3.5:4b-instruct-q4_K_M \
     COMPUTE_STRATEGY=round_robin \

@@ -48,13 +48,7 @@ echo "      Both models loaded ✓"
 # ── 4. Start Orchestrator ─────────────────────────────────────────────────────
 echo "[4/4] Launching Agent-Q3 Orchestrator on port ${PORT:-8000}..."
 cd /app
-exec python3 -m uvicorn orchestrator.main:app \
-  --host 0.0.0.0 \
-  --port "${PORT:-8000}" \
-  --log-level info \
-  --access-log &
 
-ORCH_PID=$!
 echo ""
 echo "══════════════════════════════════════════════════════════════"
 echo "  Orchestrator : http://0.0.0.0:${PORT:-8000}"
@@ -64,5 +58,27 @@ echo "  Coder        : ${CODER_MODEL}"
 echo "  Strategy     : ${COMPUTE_STRATEGY:-round_robin}"
 echo "══════════════════════════════════════════════════════════════"
 
-# Keep both processes alive — exit if either dies
-wait $OLLAMA_PID $ORCH_PID
+# Start orchestrator in background (no exec - we need the shell to remain)
+python3 -m uvicorn orchestrator.main:app \
+  --host 0.0.0.0 \
+  --port "${PORT:-8000}" \
+  --log-level info \
+  --access-log &
+
+ORCH_PID=$!
+
+# Monitor both processes — exit if either dies
+while kill -0 $OLLAMA_PID 2>/dev/null && kill -0 $ORCH_PID 2>/dev/null; do
+  sleep 5
+done
+
+# One of them died — log which one
+if ! kill -0 $OLLAMA_PID 2>/dev/null; then
+  echo "ERROR: Ollama process died (PID $OLLAMA_PID)"
+  exit 1
+fi
+
+if ! kill -0 $ORCH_PID 2>/dev/null; then
+  echo "ERROR: Orchestrator process died (PID $ORCH_PID)"
+  exit 1
+fi

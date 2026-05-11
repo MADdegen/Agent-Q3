@@ -5,9 +5,13 @@ dockerfilePath = "Dockerfile"
 [deploy]
 startCommand = "/start.sh"
 healthcheckPath = "/health"
-healthcheckTimeout = 300
+healthcheckTimeout = 600  # 10min for first boot model downloads (4GB+)
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
 
 [[services]]
 name = "ollama-gemma4-qwen35-pair"
+
+# Railway provides $PORT at runtime — ensure app binds to it
+[deploy.env]
+PORT = "${{PORT}}"
