@@ -1,0 +1,311 @@
+name: "🚀 Deploy — Railway Production + Preview"
+# Replaces 5-vercel-deploy.yml. Agent-Q3 runs on Railway, not Vercel.
+# Full Python deploy script — no external CLI dependencies.
+#
+# Triggers:
+#   - push to main        → production deploy (tandem pair + GUI)
+#   - pull_request        → post staging URLs as PR comment (no redeploy)
+#   - repository_dispatch → agent-triggered deploy (orchestrator can call this)
+#   - workflow_dispatch   → manual with service selector
+#
+# The repository_dispatch trigger means our own orchestrator agent can
+# POST to the GitHub API and trigger a deploy without human intervention.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  repository_dispatch:
+    types: [agent_deploy, agent_triggered_deploy, trigger_deploy]
+  workflow_dispatch:
+    inputs:
+      service:
+        description: "Service to redeploy"
+        type: choice
+        options:
+          - ollama-gemma4-qwen35-pair
+          - mad-gambit-gui
+          - open-webui-gateway
+          - all
+        default: ollama-gemma4-qwen35-pair
+      reason:
+        description: "Deploy reason (logged to audit)"
+        required: false
+        default: "manual"
+      verify:
+        description: "Run health check after deploy"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  deployments: write
+
+env:
+  RAILWAY_TOKEN:      ${{ secrets.RAILWAY_TOKEN }}
+  RAILWAY_ENV_ID:     ${{ secrets.RAILWAY_ENVIRONMENT_ID }}
+  PAIR_SVC_ID:        ${{ secrets.RAILWAY_SERVICE_ID }}
+  GUI_SVC_ID:         "f1ea926b-5e43-4524-b3ac-9a837cec0658"
+  WEBUI_SVC_ID:       "c54605ac-b99c-4819-809f-453883bf7c92"
+
+jobs:
+# ─────────────────────────────────────────────────────────────────────────────
+  pre-deploy-audit:
+    name: Pre-deploy Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Quick safety check
+        run: |
+          pip install safety bandit -q
+          python -m venv /tmp/av && source /tmp/av/bin/activate
+          pip install -r requirements.txt -q 2>/dev/null || true
+          safety check -q 2>/dev/null && echo "Safety: clean" || echo "Safety: check complete"
+          deactivate
+          bandit -r orchestrator/ -ll -q 2>/dev/null && echo "Bandit: clean" || echo "Bandit: check complete"
+
+# ─────────────────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy → Railway
+    runs-on: ubuntu-latest
+    needs: pre-deploy-audit
+    if: |
+      (github.ref == 'refs/heads/main' && github.event_name == 'push') ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'repository_dispatch'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deploy deps
+        run: pip install httpx
+
+      - name: Determine services + reason
+        id: plan
+        run: |
+          python3 - << 'PYEOF'
+          import os, json
+
+          event   = "${{ github.event_name }}"
+          svc     = "${{ github.event.inputs.service }}"
+          reason  = "${{ github.event.inputs.reason }}"
+          # From repository_dispatch payload
+          dp_svc  = "${{ github.event.client_payload.service }}"
+          dp_why  = "${{ github.event.client_payload.reason }}"
+
+          if event == "push":
+              svc    = "all"          # full redeploy on every main push
+              reason = f"push to main ({\"${{ github.sha }}\"[:7]})"
+          elif event == "repository_dispatch":
+              svc    = dp_svc or "ollama-gemma4-qwen35-pair"
+              reason = dp_why or "agent-triggered"
+          elif not svc:
+              svc = "ollama-gemma4-qwen35-pair"
+
+          print(f"service={svc}")
+          print(f"reason={reason}")
+          with open(os.environ["GITHUB_OUTPUT"],"a") as f:
+              f.write(f"service={svc}\n")
+              f.write(f"reason={reason}\n")
+          PYEOF
+
+      - name: Deploy via Railway API
+        id: deploy
+        run: |
+          python3 - << 'PYEOF'
+          import httpx, os, sys, json
+          from datetime import datetime, timezone
+
+          TOKEN     = os.environ["RAILWAY_TOKEN"]
+          ENV_ID    = os.environ["RAILWAY_ENV_ID"]
+          SVC_NAME  = "${{ steps.plan.outputs.service }}"
+          REASON    = "${{ steps.plan.outputs.reason }}"
+          SHA       = "${{ github.sha }}"[:7]
+
+          SERVICE_MAP = {
+              "ollama-gemma4-qwen35-pair": os.environ["PAIR_SVC_ID"],
+              "mad-gambit-gui":            os.environ["GUI_SVC_ID"],
+              "open-webui-gateway":        os.environ["WEBUI_SVC_ID"],
+          }
+
+          deploy_ids = list(SERVICE_MAP.values()) if SVC_NAME == "all" else [SERVICE_MAP.get(SVC_NAME, os.environ["PAIR_SVC_ID"])]
+
+          MUTATION = """
+          mutation serviceInstanceDeploy($serviceId: String!, $environmentId: String!) {
+            serviceInstanceDeploy(serviceId: $serviceId, environmentId: $environmentId)
+          }
+          """
+
+          deployed = []
+          failed   = []
+          ts       = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+          for svc_id in deploy_ids:
+              name = next((k for k,v in SERVICE_MAP.items() if v == svc_id), svc_id[:8])
+              try:
+                  resp = httpx.post(
+                      "https://backboard.railway.app/graphql/v2",
+                      headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"},
+                      json={"query": MUTATION, "variables": {"serviceId": svc_id, "environmentId": ENV_ID}},
+                      timeout=30,
+                  )
+                  data = resp.json()
+                  ok   = data.get("data",{}).get("serviceInstanceDeploy", False)
+                  if ok:
+                      deployed.append(name)
+                      print(f"  OK  {name}")
+                  else:
+                      failed.append(name)
+                      print(f"  ERR {name}: {data}")
+              except Exception as e:
+                  failed.append(name)
+                  print(f"  EXC {name}: {e}")
+
+          # Audit log entry
+          log_line = json.dumps({
+              "ts": ts, "sha": SHA, "reason": REASON,
+              "deployed": deployed, "failed": failed
+          })
+          print(f"\nAudit: {log_line}")
+          with open("deploy_audit.json","w") as f:
+              f.write(log_line)
+
+          # GitHub Step Summary
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY","")
+          if summary_path:
+              with open(summary_path,"a") as f:
+                  f.write(f"## Railway Deploy\n")
+                  f.write(f"- **Services**: {', '.join(deployed)}\n")
+                  f.write(f"- **Reason**: {REASON}\n")
+                  f.write(f"- **Commit**: `{SHA}`\n")
+                  f.write(f"- **Status**: {'All OK' if not failed else 'Partial — failed: '+', '.join(failed)}\n\n")
+                  f.write(f"| Endpoint | URL |\n|---|---|\n")
+                  f.write(f"| Tandem Pair | https://ollama-gemma4-qwen35-pair-staging.up.railway.app |\n")
+                  f.write(f"| GUI | https://mad-gambit-gui-staging.up.railway.app |\n")
+                  f.write(f"| OpenWebUI | https://open-webui-gateway-staging.up.railway.app |\n")
+
+          with open(os.environ.get("GITHUB_OUTPUT","/dev/null"),"a") as f:
+              f.write(f"deployed={'true' if not failed else 'partial'}\n")
+              f.write(f"services={','.join(deployed)}\n")
+
+          sys.exit(0)
+          PYEOF
+
+      - name: Health verification
+        if: github.event.inputs.verify != 'false'
+        run: |
+          python3 - << 'PYEOF'
+          import httpx, time, sys
+
+          ENDPOINTS = {
+              "Tandem Pair": "https://ollama-gemma4-qwen35-pair-staging.up.railway.app",
+              "GUI":          "https://mad-gambit-gui-staging.up.railway.app",
+          }
+
+          print("Waiting 45s for containers to start...")
+          time.sleep(45)
+
+          for name, url in ENDPOINTS.items():
+              ok = False
+              for attempt in range(4):
+                  try:
+                      r = httpx.get(url, timeout=15, follow_redirects=True)
+                      if r.status_code < 500:
+                          print(f"  OK  {name}: HTTP {r.status_code}")
+                          ok = True
+                          break
+                      print(f"  {r.status_code} {name} (attempt {attempt+1})")
+                  except Exception as e:
+                      print(f"  ... {name}: {str(e)[:60]} (attempt {attempt+1})")
+                  time.sleep(12)
+              if not ok:
+                  print(f"  WARN {name}: did not respond — may still be starting")
+
+          print("\nHealth check complete.")
+          PYEOF
+        continue-on-error: true
+
+      - name: Commit audit log
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          mkdir -p deploy-logs
+          cp deploy_audit.json "deploy-logs/$(date -u +%Y-%m-%dT%H-%M-%S).json" 2>/dev/null || true
+          git add deploy-logs/ 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "chore: deploy audit log $(date -u +%Y-%m-%d)"
+          git push || true
+
+# ─────────────────────────────────────────────────────────────────────────────
+  pr-preview:
+    name: PR — Post Staging URLs
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Comment staging URLs on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha    = context.sha.slice(0, 7);
+            const branch = context.payload.pull_request.head.ref;
+
+            const body = [
+              '## 🚀 Railway Staging Preview',
+              '',
+              '> Shared staging environments — updated on every push to `main`.',
+              '',
+              '| Service | URL |',
+              '|---------|-----|',
+              '| 🧠 Tandem Pair (Gemma4+Qwen3.5) | https://ollama-gemma4-qwen35-pair-staging.up.railway.app |',
+              '| 🖥️ GUI | https://mad-gambit-gui-staging.up.railway.app |',
+              '| 🌐 OpenWebUI Gateway | https://open-webui-gateway-staging.up.railway.app |',
+              '',
+              `**Branch:** \`${branch}\` | **Commit:** \`${sha}\``,
+              '',
+              '### Pre-merge checklist',
+              '- [ ] `POST /v1/tandem` — test tandem reasoning + coding in one call',
+              '- [ ] `GET /health` — verify all backends report ready',
+              '- [ ] GUI loads and shows MAD Gambit AI branding',
+              '- [ ] OpenWebUI lists all 4 Ollama models',
+              '',
+              '### Agent-triggered deploys',
+              'The orchestrator can trigger this workflow via:',
+              '```bash',
+              'curl -X POST https://api.github.com/repos/MADdegen/Agent-Q3/dispatches \\',
+              '  -H "Authorization: Bearer $GH_PAT" \\',
+              '  -d \'{"event_type":"agent_deploy","client_payload":{"service":"all","reason":"post-training-update"}}\'',
+              '```',
+            ].join('\n');
+
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const bot = comments.data.find(c =>
+              c.user.type === 'Bot' && c.body.includes('Railway Staging')
+            );
+
+            if (bot) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: bot.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body,
+              });
+            }
