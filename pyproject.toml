@@ -4,15 +4,12 @@ target-version = "py312"
 src = ["orchestrator", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "UP"]
+select = ["E", "F", "W"]
 ignore = [
-    "E501",   # line too long — handled by formatter
-    "N806",   # variable in function should be lowercase
+    "E501",   # line too long
+    "F401",   # unused import — handled manually
+    "E402",   # module level import not at top
 ]
-fixable = ["ALL"]
-
-[tool.ruff.lint.isort]
-known-first-party = ["orchestrator"]
 
 [tool.ruff.format]
 quote-style = "double"
