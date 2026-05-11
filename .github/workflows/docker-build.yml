@@ -5,10 +5,16 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag (default: latest)'
+        required: false
+        default: 'latest'
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}   # → ghcr.io/maddegen/agent-q3
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build-push:
@@ -38,9 +44,11 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ github.event.inputs.tag || 'latest' }},enable=${{ github.event_name == 'workflow_dispatch' }}
             type=sha,prefix=sha-
 
       - name: Build and push
+        id: build-push
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -49,7 +57,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          platforms: linux/amd64    # Railway uses amd64
+          platforms: linux/amd64
 
       - name: Output image digest
-        run: echo "Image digest ${{ steps.build-push.outputs.digest }}"
+        run: echo "Digest ${{ steps.build-push.outputs.digest }}"
