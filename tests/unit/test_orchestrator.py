@@ -2,7 +2,6 @@
 Unit tests — Agent-Q3 orchestrator
 Tests classifier, router logic, and schema validation without containers.
 """
-import pytest
 from orchestrator.models import classify_task, Message, ChatRequest
 from orchestrator.config import Settings
 
