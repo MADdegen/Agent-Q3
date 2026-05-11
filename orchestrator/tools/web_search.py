@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 web_search.py — Multi-provider web search for both agents.
 Ported from perplexity-v.1/lib/tools/web-search.ts.
@@ -98,7 +100,7 @@ async def web_search(
     max_results: int = 10,
     topic: Literal["general","news"] = "general",
     provider: Literal["auto","exa","tavily"] = "auto",
-    include_domains: Optional[list[str]] = None,
+    include_domains: list[str] | None = None,
 ) -> dict:
     """
     Multi-provider web search.  Used by BOTH agents:
