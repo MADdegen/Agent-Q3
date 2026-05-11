@@ -1,0 +1,40 @@
+version: "3.9"
+
+services:
+  agent-q3:
+    build: .
+    container_name: agent-q3
+    ports:
+      - "8000:8000"   # Orchestrator API
+      - "11434:11434" # Raw Ollama API
+    volumes:
+      - ollama_models:/root/.ollama   # Persist model weights across restarts
+    env_file:
+      - .env
+    environment:
+      REASONER_MODEL: ${REASONER_MODEL:-gemma4:e4b-instruct-q4_K_M}
+      CODER_MODEL: ${CODER_MODEL:-qwen3.5:4b-instruct-q4_K_M}
+      COMPUTE_STRATEGY: ${COMPUTE_STRATEGY:-round_robin}
+      OLLAMA_HOST: "0.0.0.0"
+      OLLAMA_ORIGINS: "*"
+      OLLAMA_NUM_GPU: "99"
+      OLLAMA_KEEP_ALIVE: "24h"
+      OLLAMA_MAX_LOADED_MODELS: "2"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s  # give time for model pulls on first boot
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  ollama_models:
+    driver: local
