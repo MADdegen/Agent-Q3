@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 prediction_markets.py — Polymarket + MAD Gambit market intelligence.
 Ported and adapted from MADdegen/agents/polymarket/{polymarket.py,gamma.py}.
@@ -16,8 +18,8 @@ CLOB_URL   = "https://clob.polymarket.com"
 async def get_polymarket_markets(
     limit: int = 20,
     active: bool = True,
-    query: Optional[str] = None,
-    tag: Optional[str] = None,
+    query: str | None = None,
+    tag: str | None = None,
 ) -> list[dict]:
     """
     Fetch active Polymarket markets via Gamma API.
@@ -43,7 +45,7 @@ async def get_polymarket_markets(
 async def get_polymarket_events(
     limit: int = 10,
     active: bool = True,
-    tag: Optional[str] = None,
+    tag: str | None = None,
 ) -> list[dict]:
     """Fetch market events with tag filtering."""
     params: dict = {"limit": limit}
