@@ -69,7 +69,7 @@ Instrumentator().instrument(app).expose(app)
 
 def _build_messages(
     request: ChatRequest,
-    system_override: Optional[str] = None,
+    system_override: str | None = None,
 ) -> list[dict]:
     """Inject system prompt + convert Pydantic messages to dicts."""
     msgs = []
