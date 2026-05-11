@@ -1,15 +1,19 @@
-FROM ollama/ollama:latest AS ollama-base
+FROM ollama/ollama:latest
 
-# ── System deps ──────────────────────────────────────────────────────────────
+# ── System deps ───────────────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y \
     python3 python3-pip python3-venv curl wget \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Python env ───────────────────────────────────────────────────────────────
+# ── Python venv (avoids PEP 668 externally-managed-environment block) ─────────
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# ── Python deps ───────────────────────────────────────────────────────────────
 WORKDIR /app
 COPY requirements.txt .
-RUN python3 -m pip install --no-cache-dir --upgrade pip \
-    && python3 -m pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
 
 # ── Orchestrator source ───────────────────────────────────────────────────────
 COPY orchestrator/ ./orchestrator/
@@ -18,10 +22,10 @@ RUN chmod +x /start.sh
 
 # ── Ports ─────────────────────────────────────────────────────────────────────
 # 11434 → Ollama raw API
-# 8000  → Orchestrator API (routed external)
+# 8000  → Orchestrator API (external)
 EXPOSE 11434 8000
 
-# ── Env defaults ─────────────────────────────────────────────────────────────
+# ── Env defaults ──────────────────────────────────────────────────────────────
 ENV OLLAMA_HOST=0.0.0.0 \
     OLLAMA_ORIGINS="*" \
     OLLAMA_NUM_GPU=99 \
