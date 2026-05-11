@@ -5,7 +5,9 @@ Classifies incoming prompts → routes to Reasoner (Gemma4-E4B) or Coder (Qwen3.
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional, Literal
+from __future__ import annotations
+
+Literal
 import re
 
 
@@ -18,8 +20,8 @@ class Message(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: list[Message]
-    model_role: Optional[Literal["reasoner", "coder", "auto"]] = "auto"
-    force_backend: Optional[Literal["local", "huggingface", "runpod"]] = None
+    model_role: Literal["reasoner", "coder", "auto" | None] = "auto"
+    force_backend: Literal["local", "huggingface", "runpod" | None] = None
     stream: bool = False
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int = Field(default=2048, ge=1, le=32768)
