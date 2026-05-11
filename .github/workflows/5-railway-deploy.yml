@@ -49,6 +49,7 @@ env:
   PAIR_SVC_ID:        ${{ secrets.RAILWAY_SERVICE_ID }}
   ORCH_SVC_ID:        "08d08d03-bd5f-4f3f-83c3-e14abe8ed3ad"
   GUI_SVC_ID:         "f1ea926b-5e43-4524-b3ac-9a837cec0658"
+  LOBE_SVC_ID:        "57cb4a6d-1099-4ea2-ab7e-c6595c0c4e2b"
   WEBUI_SVC_ID:       "c54605ac-b99c-4819-809f-453883bf7c92"
 
 jobs:
