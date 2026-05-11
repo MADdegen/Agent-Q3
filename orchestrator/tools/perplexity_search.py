@@ -11,7 +11,6 @@ Models:
   sonar-deep-research  — multi-step research, 128K ctx
 """
 import httpx
-import json
 from typing import Literal, Optional
 from orchestrator.config import settings
 
