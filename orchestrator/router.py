@@ -4,10 +4,9 @@ Alternates between: Local Ollama → HuggingFace Inference → RunPod Serverless
 Strategy: weighted round-robin with live health fallback
 """
 
-import asyncio
 import time
 from enum import Enum
-from typing import Optional, AsyncGenerator
+from typing import Optional
 import httpx
 import structlog
 
