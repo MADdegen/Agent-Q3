@@ -5,7 +5,6 @@ Used by Reasoner agent for market analysis, sentiment, and conviction scoring.
 """
 import httpx
 from typing import Optional
-from orchestrator.config import settings
 
 
 GAMMA_URL  = "https://gamma-api.polymarket.com"
