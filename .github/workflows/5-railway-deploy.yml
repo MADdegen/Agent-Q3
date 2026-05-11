@@ -47,6 +47,7 @@ env:
   RAILWAY_TOKEN:      ${{ secrets.RAILWAY_TOKEN }}
   RAILWAY_ENV_ID:     ${{ secrets.RAILWAY_ENVIRONMENT_ID }}
   PAIR_SVC_ID:        ${{ secrets.RAILWAY_SERVICE_ID }}
+  ORCH_SVC_ID:        "08d08d03-bd5f-4f3f-83c3-e14abe8ed3ad"
   GUI_SVC_ID:         "f1ea926b-5e43-4524-b3ac-9a837cec0658"
   WEBUI_SVC_ID:       "c54605ac-b99c-4819-809f-453883bf7c92"
 
@@ -135,6 +136,7 @@ jobs:
 
           SERVICE_MAP = {
               "ollama-gemma4-qwen35-pair": os.environ["PAIR_SVC_ID"],
+              "agent-q3-orchestrator":      os.environ.get("ORCH_SVC_ID","08d08d03-bd5f-4f3f-83c3-e14abe8ed3ad"),
               "mad-gambit-gui":            os.environ["GUI_SVC_ID"],
               "open-webui-gateway":        os.environ["WEBUI_SVC_ID"],
           }
