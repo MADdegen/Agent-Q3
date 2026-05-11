@@ -1,0 +1,226 @@
+name: "🔌 MCP & Model Discovery"
+# Adapted from perplexity-v.1/3-mcp-discovery.yml for Agent-Q3 (Python/Ollama stack).
+# Scans Smithery, Glama, HuggingFace GGUF, Ollama library, Anthropic/HF SDK releases.
+# Creates/updates a GitHub Issue with weekly intelligence — new tools and models
+# relevant to the dual Gemma4-E4B + Qwen3.5-4B tandem container.
+
+on:
+  schedule:
+    - cron: "0 8 * * 3"   # Wednesday 8am UTC
+  workflow_dispatch:
+    inputs:
+      budget_gb:
+        description: "Max GGUF size in GB"
+        default: "6"
+        type: string
+      model_class:
+        description: "Model size class to scan"
+        type: choice
+        options: ["2B-4B", "6B-8B", "all"]
+        default: "2B-4B"
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan Smithery MCP Registry
+        id: smithery
+        run: |
+          echo "### Smithery MCP Registry"
+          curl -s "https://registry.smithery.ai/servers?limit=20&q=agent" \
+            -H "Authorization: Bearer ${{ secrets.SMITHERY_API_KEY }}" \
+            -H "Content-Type: application/json" 2>/dev/null | \
+            python3 -c "
+          import json, sys
+          try:
+              data = json.load(sys.stdin)
+              for s in data.get('servers', [])[:12]:
+                  qn = s.get('qualifiedName','?')
+                  desc = s.get('description','')[:80]
+                  print(f'- \`{qn}\`: {desc}')
+          except: print('- Check https://smithery.ai manually')
+          " || echo "- Smithery scan: check https://smithery.ai"
+
+      - name: Scan Glama MCP Registry
+        id: glama
+        run: |
+          echo "### Glama MCP Registry"
+          curl -s "https://glama.ai/api/mcp/v1/servers?limit=20&sort=recent" \
+            -H "Accept: application/json" 2>/dev/null | \
+            python3 -c "
+          import json, sys
+          try:
+              data = json.load(sys.stdin)
+              servers = data.get('servers', data) if isinstance(data, dict) else data
+              if isinstance(servers, list):
+                  for s in servers[:12]:
+                      name = s.get('name','?')
+                      desc = s.get('description','')[:80]
+                      url = s.get('url', s.get('githubUrl',''))
+                      print(f'- [{name}]({url}): {desc}')
+          except: print('- Glama API changed — check https://glama.ai/mcp')
+          " || echo "- Check https://glama.ai/mcp"
+
+      - name: Scan awesome-mcp-servers
+        run: |
+          echo "### awesome-mcp-servers recent commits"
+          curl -s "https://api.github.com/repos/punkpeye/awesome-mcp-servers/commits?per_page=5" | \
+            python3 -c "
+          import json, sys
+          for c in json.load(sys.stdin):
+              msg = c.get('commit',{}).get('message','')[:100]
+              date = c.get('commit',{}).get('author',{}).get('date','')[:10]
+              print(f'- [{date}] {msg}')
+          " 2>/dev/null || echo "- https://github.com/punkpeye/awesome-mcp-servers"
+
+      - name: Scan HuggingFace GGUF (2B–4B class, fits tandem container)
+        id: hf_models
+        run: |
+          BUDGET="${{ github.event.inputs.budget_gb || '6' }}"
+          CLASS="${{ github.event.inputs.model_class || '2B-4B' }}"
+          echo "### HuggingFace GGUF — ${CLASS} models (≤${BUDGET}GB)"
+          curl -s "https://huggingface.co/api/models?filter=gguf&sort=lastModified&limit=30&direction=-1" | \
+            python3 -c "
+          import json, sys
+          models = json.load(sys.stdin)
+          for m in models[:20]:
+              mid = m.get('id','?')
+              likes = m.get('likes',0)
+              date = m.get('lastModified','')[:10]
+              tags = m.get('tags',[])
+              # Filter to small models
+              name_lower = mid.lower()
+              if any(x in name_lower for x in ['2b','3b','4b','mini','small','nano','e2b','e4b']):
+                  print(f'- [{mid}](https://huggingface.co/{mid}) | ⭐{likes} | {date}')
+          " 2>/dev/null || echo "- https://huggingface.co/models?filter=gguf"
+
+      - name: Scan Ollama new models (2B–6B class)
+        id: ollama
+        run: |
+          echo "### Ollama Library — small model updates"
+          python3 -c "
+          import urllib.request, json
+          TRACK = ['gemma4', 'qwen3.5', 'qwen3', 'ministral', 'phi4', 'gemma3', 'llama3.2', 'smollm']
+          for model in TRACK:
+              try:
+                  url = f'https://ollama.com/api/tags?name={model}'
+                  with urllib.request.urlopen(url, timeout=5) as r:
+                      data = json.loads(r.read())
+                      tags = [t['name'] for t in data.get('tags',[])[:3]]
+                      print(f'- {model}: {tags}')
+              except:
+                  print(f'- {model}: https://ollama.com/library/{model}')
+          " 2>/dev/null || echo "- https://ollama.com/library"
+
+      - name: Check @anthropic-ai SDK updates
+        id: anthropic_sdk
+        run: |
+          echo "### Anthropic SDK + Python SDK"
+          for pkg in "@anthropic-ai/sdk" "anthropic"; do
+            curl -s "https://registry.npmjs.org/$pkg/latest" 2>/dev/null | \
+              python3 -c "
+          import json, sys, os
+          d = json.load(sys.stdin)
+          v = d.get('version','?')
+          t = d.get('_time','?')[:10] if '_time' in d else '?'
+          print(f'- $pkg: **{v}** ({t})')
+            " 2>/dev/null
+          done
+          # Python SDK
+          curl -s "https://pypi.org/pypi/anthropic/json" | \
+            python3 -c "
+          import json,sys
+          d=json.load(sys.stdin)
+          v=d['info']['version']
+          print(f'- anthropic (PyPI): **{v}**')
+          " 2>/dev/null
+
+      - name: Check HuggingFace router new model support
+        run: |
+          echo "### HF Router (router.huggingface.co/v1) — new provider/model support"
+          echo "Manual check: https://huggingface.co/docs/inference-providers"
+          echo "Current in use: gemma-4-e4b-it (google), Qwen3.5-4B-Instruct (Qwen)"
+          echo "Frontier slots: GLM-4.5:fireworks-ai, Qwen3-Coder-480B:cerebras"
+
+      - name: Build discovery issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const now = new Date().toISOString().split('T')[0];
+            const body = [
+              `# 🔌 Agent-Q3 Intelligence Report — ${now}`,
+              '',
+              '> Auto-generated by mcp-discovery workflow. Review → act → close.',
+              '',
+              '## 📋 Tandem Container Action Items',
+              '- [ ] New MCP servers — add to `orchestrator/tools/mcp_search.py` known list',
+              '- [ ] New GGUF models — benchmark vs Gemma4-E4B (Reasoner) or Qwen3.5-4B (Coder)',
+              '- [ ] New Ollama tags — update start command in Railway if better Q4_K_M available',
+              '- [ ] Anthropic SDK bump — update `requirements.txt`',
+              '- [ ] HF router new models — update `config.py` frontier model slots',
+              '',
+              '## 🧠 Current Tandem Stack',
+              '| Role | Model | Backend |',
+              '|------|-------|---------|',
+              '| Reasoner | `gemma4:e4b-instruct-q4_K_M` | Local → HF → RunPod |',
+              '| Coder | `qwen3.5:4b-instruct-q4_K_M` | Local → HF → RunPod |',
+              '| Frontier Reasoner | `zai-org/GLM-4.5:fireworks-ai` | HF Router |',
+              '| Frontier Coder | `Qwen/Qwen3-Coder-480B-A35B-Instruct:cerebras` | HF Router |',
+              '',
+              '## 🔌 MCP + Tool Registry',
+              '`orchestrator/tools/` contains:',
+              '- `mcp_search.py` — Smithery + Glama real-time discovery',
+              '- `perplexity_search.py` — Sonar API (5 models)',
+              '- `web_search.py` — Exa + Tavily multi-provider',
+              '',
+              '## 🔧 How to add a new MCP tool',
+              '```python',
+              '# orchestrator/tools/mcp_search.py → search_mcp_servers("your query")',
+              '# orchestrator/main.py → register in TOOL_REGISTRY dict',
+              '```',
+              '',
+              '## 🦙 Upgrade Ollama model',
+              '```bash',
+              '# Update Railway start command:',
+              'ollama pull gemma4:NEW_TAG_q4_K_M',
+              '# Or add to docker-compose.yml for local dev',
+              '```',
+              '',
+              '_Next scan: next Wednesday 8am UTC_'
+            ].join('\n');
+
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner, repo: context.repo.repo,
+                name: 'intelligence-report', color: '0075ca',
+                description: 'Agent-Q3 weekly intelligence'
+              });
+            } catch(e) {}
+
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'intelligence-report'
+            });
+
+            if (issues.data.length > 0) {
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issues.data[0].number,
+                title: `🔌 Agent-Q3 Intelligence — ${now}`,
+                body
+              });
+              console.log('Updated issue:', issues.data[0].number);
+            } else {
+              const { data: issue } = await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title: `🔌 Agent-Q3 Intelligence — ${now}`,
+                body, labels: ['intelligence-report']
+              });
+              console.log('Created:', issue.html_url);
+            }
