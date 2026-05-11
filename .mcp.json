@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "reddit-mcp": {
+      "type": "http",
+      "url": "http://144.91.76.33:8080/mcp",
+      "description": "Reddit MCP server (from The-MDC/claude-agent-sdk)"
+    },
+    "weather-mcp": {
+      "type": "http",
+      "url": "https://mcp-weather-j5kl.onrender.com/mcp",
+      "description": "Weather MCP (from The-MDC/claude-code-multi-agent)"
+    },
+    "smithery-search": {
+      "type": "http",
+      "url": "https://registry.smithery.ai",
+      "description": "Smithery MCP registry \u2014 dynamic tool discovery",
+      "auth": {
+        "type": "bearer",
+        "env": "SMITHERY_API_KEY"
+      }
+    }
+  }
+}
