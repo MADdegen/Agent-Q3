@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 perplexity_search.py — Full Perplexity Sonar API integration.
 Ported from perplexity-v.1/lib/tools/perplexity-search.ts.
@@ -31,13 +33,13 @@ PplxModel = Literal[
 async def perplexity_search(
     query: str,
     model: PplxModel = "sonar-pro",
-    system_prompt: Optional[str] = None,
-    conversation_history: Optional[list[dict]] = None,
+    system_prompt: str | None = None,
+    conversation_history: list[dict] | None = None,
     max_tokens: int = 2048,
     temperature: float = 0.2,
     return_images: bool = False,
     return_related_questions: bool = True,
-    search_domain_filter: Optional[list[str]] = None,
+    search_domain_filter: list[str] | None = None,
     search_recency_filter: Optional[Literal["day","week","month","year"]] = None,
     search_context_size: Literal["low","medium","high"] = "medium",
 ) -> dict:
@@ -124,7 +126,7 @@ async def deep_research(topic: str, recency: Optional[Literal["day","week","mont
     )
 
 
-async def doc_lookup(query: str, domains: Optional[list[str]] = None) -> dict:
+async def doc_lookup(query: str, domains: list[str] | None = None) -> dict:
     """Coder agent: look up technical documentation, API references, code examples."""
     return await perplexity_search(
         query=query,
