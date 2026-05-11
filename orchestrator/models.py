@@ -23,7 +23,7 @@ class ChatRequest(BaseModel):
     stream: bool = False
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int = Field(default=2048, ge=1, le=32768)
-    system_prompt: Optional[str] = None
+    system_prompt: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -32,7 +32,7 @@ class ChatResponse(BaseModel):
     model_role: str
     model_used: str
     backend_used: str
-    usage: Optional[dict] = None
+    usage: dict | None = None
 
 
 class HealthResponse(BaseModel):
