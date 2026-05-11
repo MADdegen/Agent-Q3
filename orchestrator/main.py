@@ -10,14 +10,12 @@ Endpoints:
   GET  /metrics    — Prometheus metrics
 """
 
-import asyncio
 from contextlib import asynccontextmanager
 from typing import Optional
 
 import structlog
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from .config import settings
