@@ -15,7 +15,7 @@ from .config import settings
 log = structlog.get_logger(__name__)
 
 
-class Backend(str, Enum):
+class Backend(StrEnum):
     LOCAL    = "local"
     HF       = "huggingface"
     RUNPOD   = "runpod"
@@ -98,7 +98,7 @@ class ComputeRouter:
             h.healthy = False
             return False
 
-    def select_backend(self, force: Optional[Backend] = None) -> Backend:
+    def select_backend(self, force: Backend | None = None) -> Backend:
         if force:
             return force
         if settings.compute_strategy == "local_first":
@@ -239,7 +239,7 @@ class ComputeRouter:
         self,
         model_role: str,           # "reasoner" | "coder"
         messages: list[dict],
-        force_backend: Optional[Backend] = None,
+        force_backend: Backend | None = None,
         **kwargs
     ) -> dict:
         """
