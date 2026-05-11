@@ -1,0 +1,206 @@
+name: "🧠 Agent-Q3 Skill Evolution"
+# Adapted from perplexity-v.1/4-agentqq-skill-evolution.yml.
+# Scans The-MDC org, MADdegen repos, AI SDK releases, RunPod/HF updates.
+# Posts weekly GitHub Issue — your evolution feed for both tandem agents.
+
+on:
+  schedule:
+    - cron: "0 7 * * 0"   # Sunday 7am UTC
+  workflow_dispatch:
+    inputs:
+      scan_mode:
+        description: "What to scan"
+        type: choice
+        options: [all, skills, models, providers, runpod]
+        default: all
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  evolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan The-MDC org for new agent frameworks
+        if: ${{ github.event.inputs.scan_mode == 'all' || github.event.inputs.scan_mode == 'skills' || github.event_name == 'schedule' }}
+        run: |
+          echo "## The-MDC Org — Updated This Week"
+          curl -s "https://api.github.com/orgs/The-MDC/repos?sort=updated&per_page=20" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" | \
+            python3 -c "
+          import json, sys
+          from datetime import datetime, timedelta, timezone
+          repos = json.load(sys.stdin)
+          cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+          for r in repos:
+              pushed = r.get('pushed_at','')
+              if pushed:
+                  try:
+                      dt = datetime.fromisoformat(pushed.replace('Z','+00:00'))
+                      if dt > cutoff:
+                          print(f'- [{r[\"name\"]}](https://github.com/The-MDC/{r[\"name\"]}): {r.get(\"description\",\"\")[:60]}')
+                  except: pass
+          " 2>/dev/null || echo "- Check https://github.com/The-MDC"
+
+      - name: Scan MADdegen agent repos
+        run: |
+          echo "## MADdegen Agent Repos — Recent Activity"
+          curl -s "https://api.github.com/users/MADdegen/repos?sort=updated&per_page=20" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" | \
+            python3 -c "
+          import json, sys
+          repos = json.load(sys.stdin)
+          for r in repos[:8]:
+              name = r.get('name','?')
+              pushed = r.get('pushed_at','')[:10]
+              desc = r.get('description','')[:60]
+              url = r.get('html_url','')
+              is_private = '🔒' if r.get('private') else '🌐'
+              print(f'- {is_private} [{name}]({url}) | {pushed} | {desc}')
+          " 2>/dev/null
+
+      - name: Check Python AI SDK versions relevant to Agent-Q3
+        if: ${{ github.event.inputs.scan_mode == 'all' || github.event.inputs.scan_mode == 'providers' || github.event_name == 'schedule' }}
+        run: |
+          echo "## Python AI SDK Versions"
+          PKGS=(anthropic openai httpx fastapi pydantic-settings ollama)
+          for pkg in "${PKGS[@]}"; do
+            ver=$(curl -s "https://pypi.org/pypi/$pkg/json" | \
+              python3 -c "import json,sys; print(json.load(sys.stdin)['info']['version'])" 2>/dev/null)
+            echo "- $pkg: **$ver**"
+          done
+
+      - name: Check RunPod serverless updates
+        if: ${{ github.event.inputs.scan_mode == 'all' || github.event.inputs.scan_mode == 'runpod' || github.event_name == 'schedule' }}
+        run: |
+          echo "## RunPod — Endpoint Health Check"
+          python3 - <<'PYEOF'
+          import urllib.request, json, os
+          key = "${{ secrets.RUNPOD_API_KEY }}"
+          if not key or key == "FILL_IN":
+              print("- RUNPOD_API_KEY not set — skipping")
+          else:
+              try:
+                  req = urllib.request.Request(
+                      "https://api.runpod.io/graphql",
+                      data=json.dumps({"query":"{ myself { clientBalance endpoints { id name } } }"}).encode(),
+                      headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+                  with urllib.request.urlopen(req, timeout=10) as r:
+                      data = json.loads(r.read())
+                      me = data.get("data",{}).get("myself",{})
+                      bal = me.get("clientBalance", "?")
+                      eps = me.get("endpoints", [])
+                      print(f"- Balance: ${bal:.4f}")
+                      for ep in eps:
+                          print(f"- Endpoint: {ep['name']} (id: {ep['id']})")
+              except Exception as e:
+                  print(f"- RunPod check failed: {e}")
+          PYEOF
+
+      - name: Check Ollama model updates for tandem stack
+        if: ${{ github.event.inputs.scan_mode == 'all' || github.event.inputs.scan_mode == 'models' || github.event_name == 'schedule' }}
+        run: |
+          echo "## Ollama Model Updates — Tandem Stack"
+          echo "Tracking: gemma4, qwen3.5, ministral, qwen3"
+          for model in gemma4 qwen3.5 ministral qwen3; do
+            echo "- $model: https://ollama.com/library/$model"
+          done
+          echo ""
+          echo "Current deployed:"
+          echo "  - Reasoner: gemma4:e4b-instruct-q4_K_M"
+          echo "  - Coder:    qwen3.5:4b-instruct-q4_K_M"
+
+      - name: Check HuggingFace router new model support
+        run: |
+          echo "## HF Router (router.huggingface.co/v1) — Provider Coverage"
+          python3 -c "
+          import urllib.request, json
+          try:
+              url = 'https://huggingface.co/api/inference-providers'
+              with urllib.request.urlopen(url, timeout=8) as r:
+                  providers = json.loads(r.read())
+                  if isinstance(providers, list):
+                      for p in providers[:12]:
+                          name = p.get('name','?')
+                          status = p.get('status','?')
+                          print(f'  - {name}: {status}')
+                  else:
+                      print('  Check: https://huggingface.co/docs/inference-providers')
+          except:
+              print('  Check: https://huggingface.co/docs/inference-providers')
+          " 2>/dev/null
+
+      - name: Publish evolution report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const now = new Date().toISOString().split('T')[0];
+            const body = [
+              `# 🧠 Agent-Q3 Skill Evolution — ${now}`,
+              '',
+              '> Weekly scan. Triage → act → close.',
+              '',
+              '## Priority This Week',
+              '- [ ] Review The-MDC org — new agent frameworks to pull into orchestrator',
+              '- [ ] Python SDK bumps — update `requirements.txt` if minor version',
+              '- [ ] RunPod balance check — top up if < $5 to keep GPU workers active',
+              '- [ ] New Ollama tags — any Q4_K_M variants better than current?',
+              '- [ ] HF router providers — new compute backends worth routing to?',
+              '',
+              '## 🧠 Tandem Container — Current State',
+              '| Service | URL |',
+              '|---------|-----|',
+              '| Pair container | `https://ollama-gemma4-qwen35-pair-staging.up.railway.app` |',
+              '| OpenWebUI | `https://open-webui-gateway-staging.up.railway.app` |',
+              '| RunPod endpoint | `kukl55t0053lob` |',
+              '',
+              '## 🛠 Upgrade a tool',
+              '```bash',
+              '# Update a tool in the orchestrator:',
+              'git clone git@github.com:MADdegen/Agent-Q3.git',
+              'cd Agent-Q3',
+              '# Edit orchestrator/tools/*.py',
+              'git commit -m "tools: update X" && git push',
+              '# → CI auto-builds + redeploys to Railway',
+              '```',
+              '',
+              '## 📦 Add a new pip dependency',
+              '```',
+              '# Edit requirements.txt → push → CI redeploys',
+              '```',
+              '',
+              '_Next evolution: next Sunday 7am UTC_'
+            ].join('\n');
+
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner, repo: context.repo.repo,
+                name: 'skill-evolution', color: 'e4e669', description: 'Agent-Q3 evolution report'
+              });
+            } catch(e) {}
+
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'skill-evolution'
+            });
+
+            if (existing.data.length > 0) {
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.data[0].number,
+                title: `🧠 Agent-Q3 Evolution — ${now}`, body
+              });
+            } else {
+              const { data: issue } = await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title: `🧠 Agent-Q3 Evolution — ${now}`,
+                body, labels: ['skill-evolution']
+              });
+              console.log('Created:', issue.html_url);
+            }
