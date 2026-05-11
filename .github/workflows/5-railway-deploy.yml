@@ -131,7 +131,7 @@ jobs:
           ENV_ID    = os.environ["RAILWAY_ENV_ID"]
           SVC_NAME  = "${{ steps.plan.outputs.service }}"
           REASON    = "${{ steps.plan.outputs.reason }}"
-          SHA       = "${{ github.sha }}"[:7]
+          SHA       = "${{ github.sha }}"
 
           SERVICE_MAP = {
               "ollama-gemma4-qwen35-pair": os.environ["PAIR_SVC_ID"],
