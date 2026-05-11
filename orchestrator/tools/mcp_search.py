@@ -4,7 +4,6 @@ Ported from perplexity-v.1/lib/tools/mcp-search.ts (Smithery API).
 Also scans Glama registry as secondary source.
 """
 import httpx
-from typing import Optional
 from orchestrator.config import settings
 
 
