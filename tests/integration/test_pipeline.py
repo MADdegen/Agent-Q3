@@ -6,7 +6,6 @@ Skipped automatically if TC_CLOUD_TOKEN is not set.
 import os
 import pytest
 import httpx
-import asyncio
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("TC_CLOUD_TOKEN"),
