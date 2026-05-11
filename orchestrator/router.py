@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Compute Router — Agent-Q3
 Alternates between: Local Ollama → HuggingFace Inference → RunPod Serverless
@@ -5,7 +7,6 @@ Strategy: weighted round-robin with live health fallback
 """
 
 import time
-from enum import Enum
 from typing import Optional
 import httpx
 import structlog
