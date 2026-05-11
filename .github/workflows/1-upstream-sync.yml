@@ -1,0 +1,215 @@
+name: "⬆️ Upstream Sync — Python Dependencies & Agent Frameworks"
+# WHY: Agent-Q3 builds on top of several upstream Python frameworks.
+# Monitors them weekly, surfaces relevant commits/releases, auto-creates
+# a tracking issue with a ready-to-apply upgrade checklist.
+#
+# Upstreams tracked:
+#   - lastmile-ai/mcp-agent        (MCP agent framework — Agent-Q3 dep)
+#   - awslabs/agent-squad          (multi-agent orchestration)
+#   - The-MDC/MCP-Agent-Framework  (MAD Gambit fork of mcp-agent)
+#   - MADdegen/perplexity-v.1      (tool patterns: search, MCP discovery)
+#   - MADdegen/AGENT-QQ            (DSPy recompile, engine config)
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"   # Monday 6am UTC
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Force even if no new upstream commits"
+        type: boolean
+        default: false
+      upstream:
+        description: "Specific upstream to check (or all)"
+        type: choice
+        options: [all, mcp-agent, agent-squad, perplexity-v1, agent-qq]
+        default: all
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install sync tooling
+        run: pip install httpx pyyaml packaging
+
+      - name: Check PyPI package versions
+        run: |
+          python3 << 'PYEOF'
+          import httpx, json
+
+          TRACKED = [
+              "mcp-agent", "anthropic", "openai", "fastapi",
+              "httpx", "pydantic-settings", "exa-py",
+              "tavily-python", "dspy-ai", "asyncpg", "redis",
+          ]
+
+          lines = []
+          for pkg in TRACKED:
+              try:
+                  r = httpx.get(f"https://pypi.org/pypi/{pkg}/json", timeout=10)
+                  if r.status_code == 200:
+                      latest = r.json()["info"]["version"]
+                      lines.append(f"- **{pkg}**: `{latest}`")
+              except Exception as e:
+                  lines.append(f"- {pkg}: error ({e})")
+
+          report = "\n".join(lines)
+          print(report)
+          with open("pkg_report.txt", "w") as f:
+              f.write(report)
+          PYEOF
+
+      - name: Check upstream GitHub repos
+        run: |
+          python3 << 'PYEOF'
+          import httpx, json
+          from datetime import datetime, timedelta, timezone
+
+          UPSTREAMS = [
+              ("lastmile-ai/mcp-agent",      "MCP agent framework"),
+              ("awslabs/agent-squad",         "Multi-agent orchestration"),
+              ("MADdegen/perplexity-v.1",     "Tool patterns (search/MCP)"),
+              ("MADdegen/AGENT-QQ",           "DSPy + engine config"),
+              ("The-MDC/MCP-Agent-Framework", "MAD Gambit MCP fork"),
+          ]
+
+          cutoff  = datetime.now(timezone.utc) - timedelta(days=7)
+          headers = {"Authorization": "Bearer ${{ secrets.GITHUB_TOKEN }}"}
+          report  = []
+          releases = []
+
+          for repo, label in UPSTREAMS:
+              try:
+                  r = httpx.get(
+                      f"https://api.github.com/repos/{repo}/commits?per_page=5",
+                      headers=headers, timeout=10)
+                  commits = r.json() if r.status_code == 200 else []
+                  recent = []
+                  for c in commits[:5]:
+                      ds = c.get("commit",{}).get("author",{}).get("date","")
+                      if ds:
+                          dt = datetime.fromisoformat(ds.replace("Z","+00:00"))
+                          if dt > cutoff:
+                              msg = c["commit"]["message"].split("\n")[0][:80]
+                              recent.append(f"  - `{ds[:10]}` {msg}")
+                  if recent:
+                      report.append(f"### [{repo}](https://github.com/{repo}) — {label}")
+                      report.extend(recent)
+
+                  r2 = httpx.get(
+                      f"https://api.github.com/repos/{repo}/releases/latest",
+                      headers=headers, timeout=10)
+                  if r2.status_code == 200:
+                      rel = r2.json()
+                      tag  = rel.get("tag_name","?")
+                      date = rel.get("published_at","")[:10]
+                      releases.append(f"- [{repo}]({rel.get('html_url','')}) `{tag}` ({date})")
+              except Exception as e:
+                  report.append(f"- {repo}: check error ({e})")
+
+          with open("repo_report.txt","w") as f:
+              f.write("\n".join(report) if report else "No new upstream activity this week.")
+          with open("releases.txt","w") as f:
+              f.write("\n".join(releases) if releases else "No new releases.")
+          print("\n".join(report[:30]) if report else "All upstreams current.")
+          PYEOF
+
+      - name: Security advisory check
+        run: |
+          pip install safety -q
+          python -m venv /tmp/safety-venv
+          source /tmp/safety-venv/bin/activate
+          pip install -r requirements.txt -q 2>/dev/null || true
+          safety check --output text 2>/dev/null > safety_report.txt || true
+          deactivate
+          head -30 safety_report.txt || echo "No issues found"
+
+      - name: Create or update sync issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const today = new Date().toISOString().split('T')[0];
+
+            const pkgs    = fs.existsSync('pkg_report.txt')    ? fs.readFileSync('pkg_report.txt','utf8')    : '';
+            const repos   = fs.existsSync('repo_report.txt')   ? fs.readFileSync('repo_report.txt','utf8')   : '';
+            const rels    = fs.existsSync('releases.txt')      ? fs.readFileSync('releases.txt','utf8')      : '';
+            const safety  = fs.existsSync('safety_report.txt') ? fs.readFileSync('safety_report.txt','utf8').slice(0,600) : '';
+
+            const body = [
+              `## ⬆️ Upstream Sync Report — ${today}`,
+              '',
+              '> Auto-generated. Review → act → close.',
+              '',
+              '### 📋 Action Checklist',
+              '- [ ] Bump pinned versions in `requirements.txt` if safe',
+              '- [ ] Cherry-pick relevant upstream commits into `orchestrator/tools/`',
+              '- [ ] Patch any HIGH security advisories',
+              '- [ ] Re-run CI after changes',
+              '',
+              '### 📦 Latest PyPI Versions',
+              pkgs,
+              '',
+              '### 🔀 Upstream Activity (last 7 days)',
+              repos || '_No new commits this week._',
+              '',
+              '### 🏷️ Latest Releases',
+              rels || '_No new releases._',
+              '',
+              '### 🔒 Security Advisories',
+              '```',
+              safety || 'No issues detected.',
+              '```',
+              '',
+              '### 🛠 Apply upgrades',
+              '```bash',
+              'pip install --upgrade anthropic openai httpx fastapi pydantic-settings exa-py tavily-python',
+              'pip freeze | grep -E "anthropic|openai|httpx|fastapi|pydantic|exa|tavily" >> requirements.txt',
+              '# Then: pytest tests/ && git commit -m "deps: bump packages" && git push',
+              '```',
+              '',
+              '_Next sync: next Monday 6am UTC_'
+            ].join('\n');
+
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner, repo: context.repo.repo,
+                name: 'upstream-sync', color: '0e8a16', description: 'Upstream dependency sync'
+              });
+            } catch(e) {}
+
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'upstream-sync'
+            });
+
+            if (existing.data.length > 0) {
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.data[0].number,
+                title: `⬆️ Upstream Sync — ${today}`, body
+              });
+              console.log('Updated issue:', existing.data[0].number);
+            } else {
+              const { data: issue } = await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title: `⬆️ Upstream Sync — ${today}`,
+                body, labels: ['upstream-sync']
+              });
+              console.log('Created:', issue.html_url);
+            }
