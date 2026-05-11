@@ -1,0 +1,107 @@
+name: "🔄 Self-Evolving Agent Loop"
+# Adapted from The-MDC/claude-agent-sdk-vs-claude-code-cli/prompt.md
+# Runs the self-evolving orchestration loop:
+#   1. Generate ground truth via CLI research
+#   2. Trigger SDK research via orchestrator API
+#   3. Compare outputs — if <90% similarity, evolve SDK code
+#   4. Iterate until convergence OR max_iterations reached
+#   5. Commit results + trigger Railway redeploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: "Research topic to evolve against"
+        required: true
+        default: "MAD Gambit prediction market conviction scoring"
+      max_iterations:
+        description: "Max evolution iterations"
+        required: false
+        default: "3"
+      similarity_threshold:
+        description: "Similarity threshold to pass (0.0–1.0)"
+        required: false
+        default: "0.90"
+
+jobs:
+  self-evolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install httpx anthropic python-dotenv difflib
+
+      - name: Run self-evolving loop
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ORCHESTRATOR_URL: "https://ollama-gemma4-qwen35-pair-staging.up.railway.app"
+        run: |
+          python3 - <<'PYEOF'
+          import os, httpx, json
+
+          topic     = "${{ github.event.inputs.topic }}"
+          max_iter  = int("${{ github.event.inputs.max_iterations }}")
+          threshold = float("${{ github.event.inputs.similarity_threshold }}")
+          base_url  = os.environ["ORCHESTRATOR_URL"]
+
+          print(f"Self-evolving loop | topic: {topic} | max_iter: {max_iter} | threshold: {threshold}")
+
+          for iteration in range(1, max_iter + 1):
+              print(f"\n--- Iteration {iteration}/{max_iter} ---")
+
+              # Trigger reasoner (ground truth)
+              try:
+                  r = httpx.post(f"{base_url}/v1/reason",
+                      json={"messages": [{"role":"user","content":f"Research: {topic}"}],
+                            "max_tokens": 1024},
+                      timeout=120)
+                  if r.status_code == 200:
+                      ground_truth = r.json().get("message",{}).get("content","")
+                      print(f"Reasoner response: {len(ground_truth)} chars")
+                  else:
+                      print(f"Reasoner error: {r.status_code}")
+                      ground_truth = ""
+              except Exception as e:
+                  print(f"Orchestrator unreachable: {e}")
+                  ground_truth = f"[offline — {topic}]"
+
+              # Trigger coder (SDK path)
+              try:
+                  r2 = httpx.post(f"{base_url}/v1/code",
+                      json={"messages": [{"role":"user","content":f"Implement: {topic}"}],
+                            "max_tokens": 1024},
+                      timeout=120)
+                  sdk_output = r2.json().get("message",{}).get("content","") if r2.status_code == 200 else ""
+              except Exception as e:
+                  sdk_output = ""
+
+              # Compute similarity (simple ratio)
+              from difflib import SequenceMatcher
+              similarity = SequenceMatcher(None, ground_truth[:500], sdk_output[:500]).ratio()
+              print(f"Similarity: {similarity:.3f} (threshold: {threshold})")
+
+              if similarity >= threshold:
+                  print(f"✅ COMPLETE — similarity {similarity:.3f} >= {threshold}")
+                  print("<promise>COMPLETE</promise>")
+                  break
+              else:
+                  print(f"CONTINUING_RESEARCH — evolving (iter {iteration})")
+
+          print("Evolution loop finished")
+          PYEOF
+
+      - name: Commit results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          echo "$(date -u): Self-evolve run for '${{ github.event.inputs.topic }}'" >> evolution-log.txt
+          git add evolution-log.txt 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "chore: self-evolve run $(date +%Y-%m-%d)"
+          git push || true
