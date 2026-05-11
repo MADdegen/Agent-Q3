@@ -1,0 +1,94 @@
+name: "🧬 DSPy Auto-Recompile [Phase 6 — disabled]"
+# Adapted from MADdegen/AGENT-QQ/.github/workflows/dspy-recompile.yml
+# STATUS: DISABLED — job guard `if: false`. Flip to `if: true` in Phase 6.
+# Automatically recompiles DSPy programs when Brier score degrades.
+# Triggered manually or by repository_dispatch from the orchestrator.
+
+on:
+  repository_dispatch:
+    types: [trigger_dspy_recompile]
+  workflow_dispatch:
+    inputs:
+      namespace:
+        description: "Target namespace (e.g. mad:market_analyst_v1)"
+        required: true
+        default: "mad:market_analyst_v1"
+      brier_threshold:
+        description: "Max allowed Brier score (0.0–1.0)"
+        required: true
+        default: "0.080"
+      engine:
+        description: "Inference engine: local | hf_router | runpod"
+        required: false
+        default: "hf_router"
+
+env:
+  RUNPOD_API_KEY:   ${{ secrets.RUNPOD_API_KEY }}
+  HF_TOKEN:         ${{ secrets.HF_TOKEN }}
+  HF_TOKEN_2:       ${{ secrets.HF_TOKEN_2 }}
+  DATABASE_URL:     ${{ secrets.DATABASE_URL }}
+  RAILWAY_TOKEN:    ${{ secrets.RAILWAY_TOKEN }}
+  RAILWAY_SERVICE_ID: ${{ secrets.RAILWAY_SERVICE_ID }}
+  RAILWAY_ENVIRONMENT_ID: ${{ secrets.RAILWAY_ENVIRONMENT_ID }}
+
+jobs:
+  recompile:
+    runs-on: ubuntu-latest
+    if: false  # ← Phase 6: flip to `true`
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install DSPy + deps
+        run: |
+          pip install dspy-ai==2.5.0 huggingface_hub httpx pyyaml pydantic psycopg2-binary
+
+      - name: Validate engine config
+        run: |
+          python3 - <<'PYEOF'
+          import yaml, sys
+          with open("config/engine_config.yaml") as f:
+              cfg = yaml.safe_load(f)
+          engine = cfg.get("active_engine","local")
+          tensorrt = cfg.get("runpod",{}).get("tensorrt_approved", False)
+          if engine == "tensorrt" and not tensorrt:
+              print("⚠️  TensorRT requested but not approved — falling back to hf_router")
+              engine = "hf_router"
+          print(f"Engine: {engine}")
+          PYEOF
+
+      - name: Run DSPy recompile
+        run: |
+          python3 - <<'PYEOF'
+          import os, dspy
+
+          namespace = "${{ github.event.inputs.namespace }}"
+          threshold = float("${{ github.event.inputs.brier_threshold }}")
+          engine    = "${{ github.event.inputs.engine }}"
+
+          hf_token  = os.environ.get("HF_TOKEN") or os.environ.get("HF_TOKEN_2","")
+          if engine == "hf_router":
+              lm = dspy.LM(
+                  model="huggingface/google/gemma-4-e4b-it",
+                  api_base="https://router.huggingface.co/v1",
+                  api_key=hf_token,
+              )
+          else:
+              lm = dspy.LM(model="openai/gpt-4o-mini")   # fallback
+
+          dspy.configure(lm=lm)
+          print(f"DSPy configured: {engine} | namespace: {namespace} | threshold: {threshold}")
+          print("Recompile would run here — full implementation in Phase 6")
+          PYEOF
+
+      - name: Trigger Railway redeploy
+        run: |
+          curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"query": "mutation { serviceInstanceDeploy(serviceId: \"${{ secrets.RAILWAY_SERVICE_ID }}\", environmentId: \"${{ secrets.RAILWAY_ENVIRONMENT_ID }}\") }"}' \
+            | python3 -c "import sys,json; r=json.load(sys.stdin); print('Redeploy triggered ✅' if r.get('data') else r)"
