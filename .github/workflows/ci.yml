@@ -1,0 +1,232 @@
+name: CI — Agent-Q3 Build · Test · Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag override (default: latest)'
+        required: false
+        default: 'latest'
+      compute_strategy:
+        description: 'Compute strategy: round_robin | local_first | hf_first | runpod_first'
+        required: false
+        default: 'round_robin'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}      # → ghcr.io/maddegen/agent-q3
+  IMAGE_TAG: ${{ github.event.inputs.tag || 'latest' }}
+
+# ─────────────────────────────────────────────────────────────────────────────
+jobs:
+# ─────────────────────────────────────────────────────────────────────────────
+  lint-and-typecheck:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dev deps
+        run: |
+          python -m venv /opt/venv
+          source /opt/venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff mypy types-requests
+
+      - name: Ruff lint
+        run: |
+          source /opt/venv/bin/activate
+          ruff check orchestrator/
+
+      - name: Mypy type check
+        run: |
+          source /opt/venv/bin/activate
+          mypy orchestrator/ --ignore-missing-imports --no-strict-optional
+        continue-on-error: true   # non-blocking until types are complete
+
+# ─────────────────────────────────────────────────────────────────────────────
+  test:
+    name: Unit + Container Tests (Testcontainers Cloud)
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+
+    env:
+      TC_CLOUD_TOKEN: ${{ secrets.TC_CLOUD_TOKEN }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install test deps
+        run: |
+          python -m venv /opt/venv
+          source /opt/venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov httpx testcontainers
+
+      # ── Testcontainers Cloud agent (spins up containers in the cloud) ────────
+      - name: Setup Testcontainers Cloud Client
+        uses: atomicjar/testcontainers-cloud-setup-action@v1
+        with:
+          token: ${{ secrets.TC_CLOUD_TOKEN }}
+
+      # ── Unit tests (no containers needed) ─────────────────────────────────
+      - name: Run unit tests
+        run: |
+          source /opt/venv/bin/activate
+          pytest tests/unit/ -v --cov=orchestrator --cov-report=xml \
+            --cov-report=term-missing -x
+        env:
+          REASONER_MODEL: "gemma4:e4b-instruct-q4_K_M"
+          CODER_MODEL: "qwen3.5:4b-instruct-q4_K_M"
+          COMPUTE_STRATEGY: "local_first"
+          OLLAMA_BASE_URL: "http://localhost:11434"
+
+      # ── Integration tests (Ollama container via Testcontainers Cloud) ──────
+      - name: Run integration tests
+        run: |
+          source /opt/venv/bin/activate
+          pytest tests/integration/ -v --timeout=120 -x
+        env:
+          TC_CLOUD_TOKEN: ${{ secrets.TC_CLOUD_TOKEN }}
+          REASONER_MODEL: "gemma4:e4b-instruct-q4_K_M"
+          CODER_MODEL: "qwen3.5:4b-instruct-q4_K_M"
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        continue-on-error: true   # integration tests are informational until RunPod is wired
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+        continue-on-error: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+  build-push:
+    name: Build & Push → GHCR
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name != 'pull_request'
+
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      image_digest: ${{ steps.build-push.outputs.digest }}
+      image_tag: ${{ env.IMAGE_TAG }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.GHCR_USERNAME }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ env.IMAGE_TAG }}
+            type=sha,prefix=sha-
+            type=ref,event=branch
+
+      - name: Build and push to GHCR
+        id: build-push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+          build-args: |
+            REASONER_MODEL=gemma4:e4b-instruct-q4_K_M
+            CODER_MODEL=qwen3.5:4b-instruct-q4_K_M
+
+      - name: Image digest
+        run: |
+          echo "Digest: ${{ steps.build-push.outputs.digest }}"
+          echo "Tags: ${{ steps.meta.outputs.tags }}"
+
+# ─────────────────────────────────────────────────────────────────────────────
+  deploy-railway:
+    name: Deploy → Railway (ollama-gemma4-qwen35-pair)
+    runs-on: ubuntu-latest
+    needs: build-push
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+
+    steps:
+      - name: Trigger Railway redeploy
+        run: |
+          curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "query": "mutation { serviceInstanceDeploy(serviceId: \"${{ secrets.RAILWAY_SERVICE_ID }}\", environmentId: \"${{ secrets.RAILWAY_ENVIRONMENT_ID }}\") }"
+            }' | python3 -c "
+          import sys, json
+          r = json.load(sys.stdin)
+          if r.get('data',{}).get('serviceInstanceDeploy'):
+              print('Railway deploy triggered ✅')
+          else:
+              print('Railway deploy error:', r)
+              exit(1)
+          "
+
+      - name: Update Railway image source to new digest
+        run: |
+          DIGEST="${{ needs.build-push.outputs.image_digest }}"
+          IMAGE="ghcr.io/maddegen/agent-q3@${DIGEST}"
+          echo "Updating Railway service to image: $IMAGE"
+          curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"query\": \"mutation { serviceInstanceUpdate(serviceId: \\\"${{ secrets.RAILWAY_SERVICE_ID }}\\\", environmentId: \\\"${{ secrets.RAILWAY_ENVIRONMENT_ID }}\\\", input: { source: { image: \\\"${IMAGE}\\\" } }) }\"
+            }" | python3 -c "
+          import sys, json
+          r = json.load(sys.stdin)
+          if r.get('data',{}).get('serviceInstanceUpdate'):
+              print(f'Image pinned to digest ✅')
+          else:
+              print('Update warning:', r)
+          "
+
+      - name: Deployment summary
+        run: |
+          echo "═══════════════════════════════════════════════════════"
+          echo "  Agent-Q3 deployed to Railway"
+          echo "  Orchestrator: https://ollama-gemma4-qwen35-pair-staging.up.railway.app"
+          echo "  Reasoner    : gemma4:e4b-instruct-q4_K_M  (Gemma4-E4B)"
+          echo "  Coder       : qwen3.5:4b-instruct-q4_K_M  (Qwen3.5-4B)"
+          echo "  Strategy    : ${{ github.event.inputs.compute_strategy || 'round_robin' }}"
+          echo "  Digest      : ${{ needs.build-push.outputs.image_digest }}"
+          echo "═══════════════════════════════════════════════════════"
