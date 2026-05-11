@@ -3,12 +3,35 @@
     "reddit-mcp": {
       "type": "http",
       "url": "http://144.91.76.33:8080/mcp",
-      "description": "Reddit MCP server (from The-MDC/claude-agent-sdk)"
+      "description": "Reddit search MCP (The-MDC/claude-agent-sdk)"
     },
     "weather-mcp": {
       "type": "http",
       "url": "https://mcp-weather-j5kl.onrender.com/mcp",
-      "description": "Weather MCP (from The-MDC/claude-code-multi-agent)"
+      "description": "Weather MCP (The-MDC/claude-code-multi-agent) \u2014 free hosted"
+    },
+    "kite-trading-mcp": {
+      "type": "http",
+      "url": "https://mcp.kite.trade/mcp",
+      "description": "Kite Connect trading API \u2014 free hosted, no key for market data (MADdegen/kite-mcp-server)"
+    },
+    "playwright-mcp": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest"
+      ],
+      "description": "Microsoft Playwright browser automation \u2014 free, local"
+    },
+    "searxng-mcp": {
+      "type": "http",
+      "url": "http://searxng:8080",
+      "description": "SearXNG self-hosted meta-search (Railway internal) \u2014 aggregates 70+ engines, zero cost"
+    },
+    "arxiv-mcp": {
+      "type": "http",
+      "url": "https://mcp.arxiv.org/mcp",
+      "description": "ArXiv academic paper search \u2014 free public API"
     },
     "smithery-search": {
       "type": "http",
