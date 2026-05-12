@@ -6,13 +6,17 @@ Stack:
   Coder:    QwQ-32B (deep research, 131K ctx, coding)
 
 Compute: Local Ollama -> HuggingFace Router -> RunPod -> OpenRouter
+
+Claude Cowork integration:
+  MCP endpoint:  /cowork/mcp
+  Chat endpoint: /cowork/chat (OpenAI-compat)
+  Memory:        /cowork/memory/*
 """
 from __future__ import annotations
 
-import logging
-import time
+import asyncio
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 import structlog
 from fastapi import FastAPI, HTTPException
@@ -22,14 +26,14 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from .config import settings
 from .models import ChatRequest, TandemRequest
 from .router import ComputeRouter
+from .cowork_ui import router as cowork_router
 
 logger = structlog.get_logger(__name__)
-router = ComputeRouter()
+compute = ComputeRouter()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: warm router. Shutdown: cleanup."""
     logger.info("Agent-Q3 starting",
                 reasoner=settings.reasoner_model,
                 support=settings.support_model,
@@ -41,7 +45,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Agent-Q3",
-    description="Triple-model orchestration: Qwen2.5-VL-32B + Qwen3-8B-Kimi + QwQ-32B",
+    description="Triple-model orchestration: Qwen2.5-VL-32B + Qwen3-8B-Kimi + QwQ-32B | Claude Cowork enabled",
     version="0.3.0",
     lifespan=lifespan,
 )
@@ -56,24 +60,30 @@ app.add_middleware(
 
 Instrumentator().instrument(app).expose(app)
 
+# Mount Claude Cowork + MCP router
+app.include_router(cowork_router)
+
 
 @app.get("/health")
 async def health():
     return {
         "status": "ok",
+        "version": "0.3.0",
         "models": {
             "reasoner": settings.reasoner_model,
             "support": settings.support_model,
             "coder": settings.coder_model,
         },
         "strategy": settings.compute_strategy,
+        "cowork_mcp": "/cowork/mcp",
+        "memory": "/cowork/memory/recent",
     }
 
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
     try:
-        response = await router.chat(
+        response = await compute.chat(
             messages=[m.dict() for m in req.messages],
             model_role=req.model_role,
             force_backend=req.force_backend,
@@ -91,13 +101,12 @@ async def chat(req: ChatRequest):
 async def tandem(req: TandemRequest):
     """Run reasoner + coder in parallel, return both responses."""
     try:
-        import asyncio
-        reasoner_task = router.chat(
+        reasoner_task = compute.chat(
             messages=[{"role": "user", "content": req.research_prompt}],
             model_role="reasoner",
             max_tokens=req.max_tokens,
         )
-        coder_task = router.chat(
+        coder_task = compute.chat(
             messages=[{"role": "user", "content": req.code_prompt}],
             model_role="coder",
             max_tokens=req.max_tokens,
