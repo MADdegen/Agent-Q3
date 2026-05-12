@@ -25,7 +25,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from .config import settings
 from .models import ChatRequest, TandemRequest
-from .router import ComputeRouter
+from .router import ComputeRouter, MultiProviderRouter
 from .cowork_ui import router as cowork_router
 from .memory.agent_memory import get_memory_store
 from .reasoning.decision_graph import get_decision_graph
@@ -33,10 +33,11 @@ from .observability.tracing import init_tracing
 
 # Initialize
 memory_store = get_memory_store()
-decision_graph = get_decision_graph(compute)
 tracer = init_tracing()
 logger = structlog.get_logger(__name__)
 compute = ComputeRouter()
+multi_provider = MultiProviderRouter()
+decision_graph = get_decision_graph(compute)
 
 
 @asynccontextmanager
@@ -79,6 +80,7 @@ multi_agent_router = MultiAgentRouter(compute)
 
 @app.get("/health")
 async def health():
+    await multi_provider.health_check()
     return {
         "status": "ok",
         "version": "0.3.0",
@@ -90,7 +92,30 @@ async def health():
         "strategy": settings.compute_strategy,
         "cowork_mcp": "/cowork/mcp",
         "memory": "/cowork/memory/recent",
+        "hf_weekly_used": multi_provider.hf_weekly_used,
+        "community_healthy": multi_provider.community_healthy,
     }
+
+
+@app.post("/v1/coder")
+async def coder_endpoint(request: dict):
+    prompt = request.get("prompt", "")
+    result = await multi_provider.route_coder(prompt)
+    return {"response": result}
+
+
+@app.post("/v1/reasoner")
+async def reasoner_endpoint(request: dict):
+    prompt = request.get("prompt", "")
+    result = await multi_provider.route_reasoner(prompt)
+    return {"response": result}
+
+
+@app.post("/v1/support")
+async def support_endpoint(request: dict):
+    prompt = request.get("prompt", "")
+    result = await multi_provider.route_support(prompt)
+    return {"response": result}
 
 
 @app.post("/chat")

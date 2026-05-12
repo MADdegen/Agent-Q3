@@ -1,3 +1,4 @@
+import os
 from typing import Literal, Optional
 from pydantic_settings import BaseSettings
 
@@ -20,9 +21,19 @@ class Settings(BaseSettings):
     hf_support_model: str  = "Qwen/Qwen3-8B"
     hf_coder_model: str    = "Qwen/QwQ-32B"
 
+    # -- HuggingFace Inference API (new multi-provider architecture) ---------
+    huggingface_api_token: str = os.getenv("HUGGINGFACE_API_TOKEN", "")
+    hf_weekly_limit: int = int(os.getenv("HF_WEEKLY_LIMIT", "1000"))
+
+    # -- RunPod Community Cloud ----------------------------------------------
+    runpod_community_1: str = os.getenv("RUNPOD_COMMUNITY_1", "http://localhost:11434")
+    runpod_community_2: str = os.getenv("RUNPOD_COMMUNITY_2", "http://localhost:11434")
+
     # -- RunPod Serverless ---------------------------------------------------
     runpod_api_key: str    = ""
     runpod_endpoint_id: str = ""
+    runpod_serverless_1: str = os.getenv("RUNPOD_SERVERLESS_1", "")
+    runpod_serverless_2: str = os.getenv("RUNPOD_SERVERLESS_2", "")
 
     # -- OpenRouter fallback -------------------------------------------------
     openrouter_api_key: str = ""
