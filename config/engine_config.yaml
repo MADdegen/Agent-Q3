@@ -1,100 +1,58 @@
 # =============================================================================
-# engine_config.yaml — Agent-Q3 Inference Engine Configuration
-# Adapted from MADdegen/AGENT-QQ/config/engine_config.yaml
+# engine_config.yaml - Agent-Q3 Inference Engine Configuration
 #
 # PRIMARY:   Local Ollama (always active, zero cost)
-# SECONDARY: HuggingFace Router (router.huggingface.co/v1 — OpenAI-compat)
+# SECONDARY: HuggingFace Router (router.huggingface.co/v1 - OpenAI-compat)
 # TERTIARY:  RunPod Serverless (GPU burst, needs positive balance)
 # FALLBACK:  OpenRouter (free-tier frontier models)
 # =============================================================================
 
 active_engine: "local"   # local | hf_router | runpod | openrouter
 
-# ── Local Ollama ──────────────────────────────────────────────────────────────
+# -- Local Ollama --------------------------------------------------------
 local:
   base_url: "http://localhost:11434"
-  max_loaded_models: 2
+  max_loaded_models: 3
   keep_alive: "24h"
   models:
     reasoner:
-      tag: "gemma4:e4b-instruct-q4_K_M"
-      role: "instruct / deep research / market analysis"
-      ctx: 128000
-      gpu_layers: 99
+      tag: "hf.co/unsloth/Qwen2.5-VL-32B-Instruct-GGUF:Q4_K_M"
+      role: "multimodal reasoning / deep research / instruction"
+      ctx: 32768
+      size_gb: 20.6
+    support:
+      tag: "hf.co/TeichAI/Qwen3-8B-Kimi-K2-Thinking-Distill-GGUF:Q4_K_M"
+      role: "hybrid reasoning / support / fast instruct"
+      ctx: 32768
+      size_gb: 5.0
     coder:
-      tag: "qwen3.5:4b-instruct-q4_K_M"
-      role: "code generation / fetch / file ops"
-      ctx: 256000
-      gpu_layers: 99
+      tag: "hf.co/unsloth/QwQ-32B-GGUF:Q4_K_M"
+      role: "deep research / coding / long context"
+      ctx: 131072
+      size_gb: 19.0
 
-# ── HuggingFace Router (router.huggingface.co/v1) ────────────────────────────
-# OpenAI-compatible. Rotates HF_TOKEN / HF_TOKEN_2 / HF_TOKEN_3 on 429.
-# Unlocks frontier models (GLM-4.5, Qwen-Coder-480B) at near-zero cost.
+# -- HuggingFace Router --------------------------------------------------
 hf_router:
   base_url: "https://router.huggingface.co/v1"
   models:
-    reasoner:
-      model_id: "google/gemma-4-e4b-it"
-      frontier: "zai-org/GLM-4.5:fireworks-ai"          # 130B reasoning
-      vision: "google/gemma-4-e4b-it"
-    coder:
-      model_id: "Qwen/Qwen3.5-4B-Instruct"
-      frontier: "Qwen/Qwen3-Coder-480B-A35B-Instruct:cerebras"  # best OSS coder
-  token_rotation:
-    - env: HF_TOKEN
-    - env: HF_TOKEN_2
-    - env: HF_TOKEN_3
+    reasoner: "Qwen/Qwen2.5-VL-32B-Instruct"
+    support:  "Qwen/Qwen3-8B"
+    coder:    "Qwen/QwQ-32B"
 
-# ── RunPod Serverless ─────────────────────────────────────────────────────────
-# Approval-gated: requires RUNPOD_API_KEY + positive balance ($0.01+ min)
-# Adapted from AGENT-QQ vLLM/TensorRT gate pattern.
+# -- RunPod Serverless ---------------------------------------------------
 runpod:
-  api_url: "https://api.runpod.ai/v2"
-  endpoints:
-    reasoner:
-      id: "kukl55t0053lob"     # AgentQQ Worker Ollama
-      gpu_class: "AMPERE_16"   # RTX A4000 — efficient for 4B
-      workers_min: 0           # scale-to-zero when idle
-      workers_max: 2
-      idle_timeout_secs: 30
-    coder:
-      id: "kukl55t0053lob"     # shared endpoint, model specified per-request
-      gpu_class: "AMPERE_16"
-      workers_min: 0
-      workers_max: 2
-  # TensorRT gate (from AGENT-QQ pattern):
-  tensorrt_approved: false     # flip true only when: 1) model locked 6mo+ 2) >2000 req/min
-  fallback_to_vllm: true       # always fall back if TRT unavailable
+  endpoint_template: "https://api.runpod.ai/v2/{endpoint_id}/runsync"
 
-# ── OpenRouter (frontier fallback — free tier) ────────────────────────────────
+# -- OpenRouter fallback -------------------------------------------------
 openrouter:
   base_url: "https://openrouter.ai/api/v1"
   models:
-    reasoner: "google/gemma-2-27b-it:free"
-    coder: "qwen/qwen-2.5-coder-7b-instruct:free"
+    reasoner: "qwen/qwen2.5-vl-32b-instruct"
+    support:  "qwen/qwen3-8b"
+    coder:    "qwen/qwq-32b"
 
-# ── Compute routing weights ───────────────────────────────────────────────────
-routing:
-  strategy: "round_robin"       # round_robin | load_based | local_first | hf_first
-  weights:
-    local:      60
-    hf_router:  25
-    runpod:     15
-    openrouter: 0               # fallback only — not in round-robin rotation
-
-# ── Tool registry (both agents) ───────────────────────────────────────────────
-tools:
-  mcp_servers:
-    reddit:
-      type: "http"
-      url: "http://144.91.76.33:8080/mcp"    # from The-MDC/claude-agent-sdk
-    weather:
-      type: "http"
-      url: "https://mcp-weather-j5kl.onrender.com/mcp"  # from claude-code-multi-agent
-  search:
-    primary: "perplexity"       # sonar-pro
-    secondary: "exa"
-    tertiary: "tavily"
-  prediction_markets:
-    polymarket: true            # gamma + CLOB APIs
-    mad_gambit: true            # internal conviction market feed
+# -- Perplexity deep research (optional premium) -------------------------
+perplexity:
+  base_url: "https://api.perplexity.ai"
+  default_model: "sonar-deep-research"
+  fast_model: "sonar"
