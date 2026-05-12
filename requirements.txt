@@ -43,8 +43,6 @@ ruff>=0.9.0
 mypy>=1.14.0
 types-requests>=2.32.0
 composio-core>=0.3.0
-composio-github>=0.3.0
-composio-google-drive>=0.3.0
 # Memory & State Management
 sqlalchemy>=2.0.0
 alembic>=1.13.0
