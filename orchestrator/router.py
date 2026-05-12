@@ -310,3 +310,149 @@ class ComputeRouter:
 
 # Singleton
 router = ComputeRouter()
+
+
+# ── 4-Tier Multi-Provider Router ─────────────────────────────────────────────
+
+from orchestrator.providers.huggingface_provider import call_huggingface
+from orchestrator.providers.runpod_provider import call_runpod_community, call_runpod_serverless
+from orchestrator.providers.openrouter_provider import call_openrouter
+
+
+class MultiProviderRouter:
+    """
+    4-tier inference router for Agent-Q3.
+
+    Tier 1: HuggingFace Pro      — cheap, rate-limited (weekly budget)
+    Tier 2: RunPod Community      — fast, primary GPU nodes
+    Tier 3: RunPod Serverless     — on-demand, guaranteed capacity
+    Tier 4: OpenRouter            — pay-per-token, always available
+    """
+
+    def __init__(self):
+        self.hf_weekly_used: int = 0
+        self.hf_weekly_limit: int = settings.hf_weekly_limit or 1000
+        self.community_healthy: bool = True
+
+    async def route_coder(self, prompt: str) -> str:
+        """Route coder: HF → Community → Serverless → OpenRouter"""
+
+        # Tier 1: HuggingFace Pro (cheap, slow)
+        if self.hf_weekly_used < self.hf_weekly_limit:
+            try:
+                log.info("routing coder to huggingface", weekly_used=self.hf_weekly_used)
+                result = await call_huggingface(settings.hf_coder_model, prompt)
+                self.hf_weekly_used += 1
+                return result
+            except Exception as e:
+                log.warning("huggingface coder failed", error=str(e))
+
+        # Tier 2: RunPod Community (fast, primary)
+        if self.community_healthy:
+            try:
+                log.info("routing coder to runpod community")
+                return await call_runpod_community(
+                    settings.coder_model, prompt, settings.runpod_community_1
+                )
+            except Exception as e:
+                log.warning("community coder failed", error=str(e))
+                self.community_healthy = False
+
+        # Tier 3: RunPod Serverless (guaranteed)
+        if settings.runpod_serverless_1:
+            try:
+                log.info("routing coder to runpod serverless")
+                return await call_runpod_serverless(
+                    settings.coder_model, prompt, settings.runpod_serverless_1
+                )
+            except Exception as e:
+                log.warning("serverless coder failed", error=str(e))
+
+        # Tier 4: OpenRouter (guaranteed fallback)
+        log.info("routing coder to openrouter (final fallback)")
+        return await call_openrouter("openai/gpt-4o", prompt)
+
+    async def route_reasoner(self, prompt: str) -> str:
+        """Route reasoner: HF → Community → Serverless → OpenRouter"""
+
+        # Tier 1: HuggingFace Pro
+        if self.hf_weekly_used < self.hf_weekly_limit:
+            try:
+                log.info("routing reasoner to huggingface", weekly_used=self.hf_weekly_used)
+                result = await call_huggingface(settings.hf_reasoner_model, prompt)
+                self.hf_weekly_used += 1
+                return result
+            except Exception as e:
+                log.warning("huggingface reasoner failed", error=str(e))
+
+        # Tier 2: RunPod Community
+        if self.community_healthy:
+            try:
+                log.info("routing reasoner to runpod community")
+                return await call_runpod_community(
+                    settings.reasoner_model, prompt, settings.runpod_community_2
+                )
+            except Exception as e:
+                log.warning("community reasoner failed", error=str(e))
+                self.community_healthy = False
+
+        # Tier 3: RunPod Serverless
+        if settings.runpod_serverless_2:
+            try:
+                log.info("routing reasoner to runpod serverless")
+                return await call_runpod_serverless(
+                    settings.reasoner_model, prompt, settings.runpod_serverless_2
+                )
+            except Exception as e:
+                log.warning("serverless reasoner failed", error=str(e))
+
+        # Tier 4: OpenRouter (guaranteed fallback)
+        log.info("routing reasoner to openrouter (final fallback)")
+        return await call_openrouter("anthropic/claude-3.5-sonnet", prompt)
+
+    async def route_support(self, prompt: str) -> str:
+        """Route support: Community → Serverless → OpenRouter (no HF)"""
+
+        # Tier 2: RunPod Community (Kimi 8B is lightweight)
+        if self.community_healthy:
+            try:
+                log.info("routing support to runpod community")
+                return await call_runpod_community(
+                    settings.support_model, prompt, settings.runpod_community_1
+                )
+            except Exception as e:
+                log.warning("community support failed", error=str(e))
+                self.community_healthy = False
+
+        # Tier 3: RunPod Serverless
+        if settings.runpod_serverless_1:
+            try:
+                log.info("routing support to runpod serverless")
+                return await call_runpod_serverless(
+                    settings.support_model, prompt, settings.runpod_serverless_1
+                )
+            except Exception as e:
+                log.warning("serverless support failed", error=str(e))
+
+        # Tier 4: OpenRouter (guaranteed fallback)
+        log.info("routing support to openrouter (final fallback)")
+        return await call_openrouter("meta-llama/llama-3.1-405b", prompt)
+
+    async def health_check(self):
+        """Probe community cloud health and update internal flag."""
+        try:
+            await call_runpod_community("test", "ping", settings.runpod_community_1)
+            self.community_healthy = True
+            log.info("community cloud healthy")
+        except Exception as e:
+            self.community_healthy = False
+            log.warning("community cloud unhealthy", error=str(e))
+
+    def reset_weekly_limits(self):
+        """Reset HF weekly counter (call every Monday via scheduler)."""
+        self.hf_weekly_used = 0
+        log.info("weekly limits reset")
+
+
+# Singleton
+multi_provider = MultiProviderRouter()
