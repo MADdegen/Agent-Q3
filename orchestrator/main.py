@@ -27,7 +27,14 @@ from .config import settings
 from .models import ChatRequest, TandemRequest
 from .router import ComputeRouter
 from .cowork_ui import router as cowork_router
+from .memory.agent_memory import get_memory_store
+from .reasoning.decision_graph import get_decision_graph
+from .observability.tracing import init_tracing
 
+# Initialize
+memory_store = get_memory_store()
+decision_graph = get_decision_graph(compute)
+tracer = init_tracing()
 logger = structlog.get_logger(__name__)
 compute = ComputeRouter()
 
@@ -144,17 +151,48 @@ async def execute_tool(req: dict):
 
 @app.post("/multi-agent")
 async def multi_agent(req: dict):
-    """Route through multi-agent orchestration.
+    """Route through multi-agent orchestration with reasoning traces.
     
     Kimi can spawn Reasoner + Coder for complex tasks.
+    Traces all decisions and tool execution.
     """
     query = req.get("query")
     context = req.get("context", {})
-    force_single = req.get("force_single_agent", False)
+    conversation_id = req.get("conversation_id") or memory_store.create_conversation()
     
-    result = await multi_agent_router.route(
-        query=query,
-        context=context,
-        force_single_agent=force_single,
+    # Log user message
+    memory_store.add_message(conversation_id, "user", query)
+    
+    # Trace decision
+    tracer.trace_reasoning_step("support", "analyze_query", query)
+    
+    # Run decision graph
+    state = {
+        "conversation_id": conversation_id,
+        "query": query,
+        "context": context,
+        "should_spawn": False,
+        "spawned_agents": [],
+        "reasoner_result": None,
+        "coder_result": None,
+        "synthesis": None,
+        "final_response": "",
+    }
+    
+    result = await decision_graph.invoke(state)
+    
+    # Log assistant response
+    memory_store.add_message(
+        conversation_id,
+        "assistant",
+        result["final_response"],
+        model_used="support",
     )
-    return result
+    
+    return {
+        "conversation_id": conversation_id,
+        "multi_agent": result["should_spawn"],
+        "spawned_agents": result.get("spawned_agents", []),
+        "response": result["final_response"],
+        "reasoning_traces": memory_store.get_reasoning_traces(conversation_id, limit=10),
+    }
