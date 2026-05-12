@@ -1,84 +1,47 @@
 #!/bin/bash
 set -e
 
-echo "╔══════════════════════════════════════════════════════════╗"
-echo "║           Agent-Q3 — MAD Gambit Orchestrator             ║"
-echo "║   Reasoner: Gemma4-E4B  |  Coder: Qwen3.5-4B            ║"
-echo "╚══════════════════════════════════════════════════════════╝"
+echo "╔════════════════════════════════════════════╗"
+echo "║         Agent Q3 - Ollama Stack            ║"
+echo "║  Reasoner: Qwen2.5-VL-32B  |  QwQ-32B    ║"
+echo "║  Support:  Qwen3-8B Kimi-K2 Distilled     ║"
+echo "╚════════════════════════════════════════════╝"
 
-# ── 1. Start Ollama server in background ─────────────────────────────────────
-echo "[1/4] Starting Ollama server..."
+# Start Ollama server in background
 ollama serve &
 OLLAMA_PID=$!
 
-# ── 2. Wait until Ollama is ready ────────────────────────────────────────────
-echo "[2/4] Waiting for Ollama readiness..."
-MAX_WAIT=60
-WAITED=0
-until curl -sf http://localhost:11434/ > /dev/null 2>&1; do
-  sleep 2
-  WAITED=$((WAITED + 2))
-  if [ $WAITED -ge $MAX_WAIT ]; then
-    echo "ERROR: Ollama did not start within ${MAX_WAIT}s"
-    exit 1
+# Wait for Ollama to be ready
+echo "Waiting for Ollama to start..."
+for i in $(seq 1 60); do
+  if curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; then
+    echo "✓ Ollama is ready"
+    break
   fi
+  sleep 2
 done
-echo "      Ollama ready after ${WAITED}s"
-
-# ── 3. Pull models (skip if already cached) ───────────────────────────────────
-echo "[3/4] Pulling models (Q4_K_M GGUF)..."
 
 pull_model() {
   local model=$1
   local label=$2
-  echo "  ► Pulling ${label} (${model})..."
-  if ollama list | grep -q "$(echo $model | cut -d: -f1)"; then
-    echo "    ✓ ${label} already cached, skipping pull"
+  # Exact tag match — check full model:tag string
+  if ollama list | awk '{print $1}' | grep -qx "$model"; then
+    echo " ✓ ${label} already cached, skipping pull"
   else
+    echo " ↓ Pulling ${label}..."
     ollama pull "$model"
-    echo "    ✓ ${label} ready"
+    echo " ✓ ${label} ready"
   fi
 }
 
-pull_model "${REASONER_MODEL:-gemma4:e4b-instruct-q4_K_M}" "Gemma4-E4B (Reasoner)"
-pull_model "${CODER_MODEL:-qwen3.5:4b-instruct-q4_K_M}"    "Qwen3.5-4B (Coder)"
-
-echo "      Both models loaded ✓"
-
-# ── 4. Start Orchestrator ─────────────────────────────────────────────────────
-echo "[4/4] Launching Agent-Q3 Orchestrator on port ${PORT:-8000}..."
-cd /app
+pull_model "${REASONER_MODEL:-hf.co/unsloth/Qwen2.5-VL-32B-Instruct-GGUF:Q4_K_M}" "Qwen2.5-VL-32B (Reasoner)"
+pull_model "${SUPPORT_MODEL:-hf.co/TeichAI/Qwen3-8B-Kimi-K2-Thinking-Distill-GGUF:Q4_K_M}" "Qwen3-8B Kimi-K2 (Support)"
+pull_model "${CODER_MODEL:-hf.co/unsloth/QwQ-32B-GGUF:Q4_K_M}" "QwQ-32B (Deep Research/Coder)"
 
 echo ""
-echo "══════════════════════════════════════════════════════════════"
-echo "  Orchestrator : http://0.0.0.0:${PORT:-8000}"
-echo "  Ollama API   : http://0.0.0.0:11434"
-echo "  Reasoner     : ${REASONER_MODEL}"
-echo "  Coder        : ${CODER_MODEL}"
-echo "  Strategy     : ${COMPUTE_STRATEGY:-round_robin}"
-echo "══════════════════════════════════════════════════════════════"
+echo "✓ All models ready. Ollama running on :11434"
+echo ""
+ollama list
 
-# Start orchestrator in background (no exec - we need the shell to remain)
-python3 -m uvicorn orchestrator.main:app \
-  --host 0.0.0.0 \
-  --port "${PORT:-8000}" \
-  --log-level info \
-  --access-log &
-
-ORCH_PID=$!
-
-# Monitor both processes — exit if either dies
-while kill -0 $OLLAMA_PID 2>/dev/null && kill -0 $ORCH_PID 2>/dev/null; do
-  sleep 5
-done
-
-# One of them died — log which one
-if ! kill -0 $OLLAMA_PID 2>/dev/null; then
-  echo "ERROR: Ollama process died (PID $OLLAMA_PID)"
-  exit 1
-fi
-
-if ! kill -0 $ORCH_PID 2>/dev/null; then
-  echo "ERROR: Orchestrator process died (PID $ORCH_PID)"
-  exit 1
-fi
+# Keep Ollama running
+wait $OLLAMA_PID
