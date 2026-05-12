@@ -9,12 +9,13 @@ Strategy: weighted round-robin with live health fallback
 import time
 from enum import StrEnum
 from typing import Optional
+
 import httpx
 import structlog
 
 from .config import settings
 
-log = structlog.get_logger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class Backend(StrEnum):
@@ -35,7 +36,7 @@ class BackendHealth:
         self.consecutive_errors += 1
         if self.consecutive_errors >= 3:
             self.healthy = False
-            log.warning("backend marked unhealthy", errors=self.consecutive_errors)
+            logger.warning("backend marked unhealthy", errors=self.consecutive_errors)
 
     def mark_success(self):
         self.consecutive_errors = 0
@@ -83,7 +84,7 @@ class ComputeRouter:
             if self._health[candidate].healthy:
                 return candidate
         # All unhealthy → force local
-        log.warning("all backends unhealthy, forcing local")
+        logger.warning("all backends unhealthy, forcing local")
         return Backend.LOCAL
 
     async def check_local_health(self) -> bool:
@@ -141,7 +142,7 @@ class ComputeRouter:
                 return r.json()
         except Exception as e:
             h.mark_error()
-            log.error("local backend error", error=str(e))
+            logger.error("local backend error", error=str(e))
             raise
 
     async def call_hf(
@@ -187,7 +188,7 @@ class ComputeRouter:
                 }
         except Exception as e:
             h.mark_error()
-            log.error("HF backend error", error=str(e))
+            logger.error("HF backend error", error=str(e))
             raise
 
     async def call_runpod(
@@ -234,7 +235,7 @@ class ComputeRouter:
                 }
         except Exception as e:
             h.mark_error()
-            log.error("RunPod backend error", error=str(e))
+            logger.error("RunPod backend error", error=str(e))
             raise
 
     async def route(
@@ -266,7 +267,7 @@ class ComputeRouter:
         }
         model = model_map[model_role][backend]
 
-        log.info("routing request", backend=backend, model=model, role=model_role)
+        logger.info("routing request", backend=backend, model=model, role=model_role)
 
         fallback_chain = [backend]
         for b in [Backend.LOCAL, Backend.HF, Backend.RUNPOD]:
@@ -298,7 +299,7 @@ class ComputeRouter:
 
             except Exception as e:
                 last_err = e
-                log.warning(
+                logger.warning(
                     "backend failed, trying next",
                     failed=attempt_backend,
                     error=str(e)
@@ -308,5 +309,42 @@ class ComputeRouter:
         raise RuntimeError(f"All backends failed for role={model_role}: {last_err}")
 
 
-# Singleton
+class MultiProviderRouter:
+    """Thin façade that wires the provider modules into the ComputeRouter.
+
+    Delegates all routing decisions to ComputeRouter while exposing a
+    unified interface for callers that want to reference providers by name
+    rather than by Backend enum value.
+    """
+
+    def __init__(self, compute_router: ComputeRouter | None = None) -> None:
+        self._compute = compute_router or ComputeRouter()
+
+    async def route(
+        self,
+        model_role: str,
+        messages: list[dict],
+        force_backend: Backend | None = None,
+        **kwargs: object,
+    ) -> dict:
+        """Route a request through the underlying ComputeRouter."""
+        return await self._compute.route(
+            model_role=model_role,
+            messages=messages,
+            force_backend=force_backend,
+            **kwargs,
+        )
+
+    async def health(self) -> dict[str, bool]:
+        """Return a health snapshot for all backends."""
+        local_ok = await self._compute.check_local_health()
+        return {
+            "local": local_ok,
+            "huggingface": bool(self._compute._health[Backend.HF].healthy),
+            "runpod": bool(self._compute._health[Backend.RUNPOD].healthy),
+        }
+
+
+# Singletons
 router = ComputeRouter()
+multi_provider_router = MultiProviderRouter(router)
