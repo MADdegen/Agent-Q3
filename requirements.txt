@@ -45,3 +45,26 @@ types-requests>=2.32.0
 composio-core>=0.3.0
 composio-github>=0.3.0
 composio-google-drive>=0.3.0
+# Memory & State Management
+sqlalchemy>=2.0.0
+alembic>=1.13.0
+
+# Reasoning & Planning
+langgraph>=0.0.50
+pydantic-ai>=0.1.0
+
+# Caching & Performance
+cachetools>=5.3.0
+diskcache>=5.6.0
+
+# Observability & Tracing
+opentelemetry-api>=1.20.0
+opentelemetry-sdk>=1.20.0
+opentelemetry-exporter-jaeger>=1.20.0
+
+# Async Utilities
+tenacity>=8.2.0
+aiofiles>=23.2.0
+
+# Type Safety
+typing-extensions>=4.8.0
