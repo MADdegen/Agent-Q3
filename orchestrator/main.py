@@ -63,6 +63,12 @@ Instrumentator().instrument(app).expose(app)
 # Mount Claude Cowork + MCP router
 app.include_router(cowork_router)
 
+# Multi-agent & CoWork
+from .tools.composio_tools import get_composio_client
+from .tools.multi_agent_router import MultiAgentRouter
+
+composio_client = get_composio_client()
+multi_agent_router = MultiAgentRouter(compute)
 
 @app.get("/health")
 async def health():
@@ -116,3 +122,39 @@ async def tandem(req: TandemRequest):
     except Exception as e:
         logger.error("tandem error", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
+      @app.get("/tools")
+async def get_tools():
+    """Expose all CoWork tools to LobeChat."""
+    tools = await composio_client.get_all_tools()
+    return {
+        "tools": tools,
+        "count": len(tools),
+        "categories": ["github", "google_drive", "browser"],
+    }
+
+
+@app.post("/execute-tool")
+async def execute_tool(req: dict):
+    """Execute a Composio tool."""
+    tool_name = req.get("tool_name")
+    params = req.get("params", {})
+    result = await composio_client.execute_tool(tool_name, params)
+    return result
+
+
+@app.post("/multi-agent")
+async def multi_agent(req: dict):
+    """Route through multi-agent orchestration.
+    
+    Kimi can spawn Reasoner + Coder for complex tasks.
+    """
+    query = req.get("query")
+    context = req.get("context", {})
+    force_single = req.get("force_single_agent", False)
+    
+    result = await multi_agent_router.route(
+        query=query,
+        context=context,
+        force_single_agent=force_single,
+    )
+    return result
