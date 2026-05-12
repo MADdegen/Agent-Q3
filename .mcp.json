@@ -1,5 +1,25 @@
 {
   "mcpServers": {
+    "agent-q3": {
+      "type": "http",
+      "url": "http://localhost:8000/cowork/mcp",
+      "description": "Agent-Q3 self — reason/research/support + memory tools (local)"
+    },
+    "agent-q3-railway": {
+      "type": "http",
+      "url": "https://ollama-gemma4-qwen35-pair-staging.up.railway.app/cowork/mcp",
+      "description": "Agent-Q3 Railway deployment — all tools via MCP"
+    },
+    "huggingface": {
+      "type": "http",
+      "url": "https://huggingface.co/mcp",
+      "description": "HuggingFace Hub MCP — model/dataset/space/paper search + job management"
+    },
+    "agent-q3-memory": {
+      "type": "http",
+      "url": "http://localhost:8000/cowork/mcp",
+      "description": "Agent-Q3 persistent memory — save/search via pgvector + Redis"
+    },
     "reddit-mcp": {
       "type": "http",
       "url": "http://144.91.76.33:8080/mcp",
@@ -8,12 +28,12 @@
     "weather-mcp": {
       "type": "http",
       "url": "https://mcp-weather-j5kl.onrender.com/mcp",
-      "description": "Weather MCP (The-MDC/claude-code-multi-agent) \u2014 free hosted"
+      "description": "Weather MCP (The-MDC/claude-code-multi-agent) — free hosted"
     },
     "kite-trading-mcp": {
       "type": "http",
       "url": "https://mcp.kite.trade/mcp",
-      "description": "Kite Connect trading API \u2014 free hosted, no key for market data (MADdegen/kite-mcp-server)"
+      "description": "Kite Connect trading API — free hosted, no key for market data"
     },
     "playwright-mcp": {
       "type": "stdio",
@@ -21,26 +41,40 @@
       "args": [
         "@playwright/mcp@latest"
       ],
-      "description": "Microsoft Playwright browser automation \u2014 free, local"
+      "description": "Microsoft Playwright browser automation — free, local"
     },
     "searxng-mcp": {
       "type": "http",
       "url": "http://searxng:8080",
-      "description": "SearXNG self-hosted meta-search (Railway internal) \u2014 aggregates 70+ engines, zero cost"
+      "description": "SearXNG self-hosted meta-search (Railway internal)"
     },
-    "arxiv-mcp": {
+    "perplexity-deep-research": {
       "type": "http",
-      "url": "https://mcp.arxiv.org/mcp",
-      "description": "ArXiv academic paper search \u2014 free public API"
+      "url": "http://localhost:8000/cowork/mcp",
+      "description": "Perplexity sonar-deep-research via Agent-Q3 MCP bridge",
+      "tools": [
+        "deep_research"
+      ]
     },
-    "smithery-search": {
-      "type": "http",
-      "url": "https://registry.smithery.ai",
-      "description": "Smithery MCP registry \u2014 dynamic tool discovery",
-      "auth": {
-        "type": "bearer",
-        "env": "SMITHERY_API_KEY"
-      }
+    "postgres-mcp": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-postgres",
+        "${DATABASE_URL}"
+      ],
+      "description": "Postgres MCP — direct DB access for upgrades/schema changes"
+    },
+    "filesystem-mcp": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/app"
+      ],
+      "description": "Filesystem MCP — agent can read/write /app directory"
     }
   }
 }
