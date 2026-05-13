@@ -74,7 +74,7 @@ curl -X POST http://localhost:8000/v1/tandem \
 
 | Strategy | Behaviour |
 |---|---|
-| `round_robin` | 60% local / 25% HF / 15% RunPod (default) |
+| `round_robin` | 45% local / 35% HF / 20% RunPod (default) |
 | `local_first` | Always local, fall back to HF |
 | `hf_first` | Always HF, fall back to local |
 | `runpod_first` | Always RunPod, fall back to local |
@@ -84,10 +84,10 @@ Set `COMPUTE_STRATEGY` env var to switch at runtime.
 
 ---
 
-## Railway Deployment
+## HuggingFace Deployment
 
 Railway project: `exciting-freedom`  
-Service: `ollama-gemma4-qwen35-pair`  
+Service: `ollama-gemma4-ClawCode Kimi2.6.pair`  
 Domain: `ollama-gemma4-qwen35-pair-staging.up.railway.app`
 
 The Railway service is connected to this repo — pushes to `main` auto-deploy.
