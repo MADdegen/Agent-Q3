@@ -1,7 +1,7 @@
 # Agent-Q3 — MAD Gambit Dual-Model Orchestrator
 
 **Reasoner:** Gemma4-E4B Q4_K_M · **Coder:** Qwen3.5-4B Q4_K_M  
-**Compute:** Local Ollama → HuggingFace → RunPod (weighted round-robin)
+**Compute:** Local Ollama → HuggingFace → OpenRouter → RunPod (weighted round-robin)
 
 ---
 
@@ -9,8 +9,8 @@
 
 ```
 POST /v1/chat     → auto-classify → Reasoner or Coder
-POST /v1/reason   → force Gemma4-E4B  (instruct / deep research / planning)
-POST /v1/code     → force Qwen3.5-4B  (code / fetch / file ops / debug)
+POST /v1/reason   → force Gemma4-E4B  (instruct / deep research / code checker/ planning)
+POST /v1/code     → force Qwen3.5-4B  (coder / code audit / fetch / file ops / debug)
 POST /v1/tandem   → Gemma4 reasons → Qwen3.5 implements (chained)
 GET  /health      → backend health + loaded models
 GET  /metrics     → Prometheus
@@ -23,14 +23,16 @@ GET  /metrics     → Prometheus
 │            Agent-Q3 Container               │
 │                                             │
 │  Ollama :11434                              │
-│  ├── gemma4:e4b-instruct-q4_K_M  (Reasoner)│
-│  └── qwen3.5:4b-instruct-q4_K_M  (Coder)   │
+│  ├── gemma4:e4b-instruct-q4_K_M  (Reasoner) │
+│  └── qwen3.5:4b-instruct-q4_K_M  (Coder)    │
 │                                             │
 │  Orchestrator FastAPI :8000                 │
 │  └── ComputeRouter                          │
-│       ├── Local   (60% weight)              │
+│       ├── Local       (40% weight)          │
 │       ├── HuggingFace (25%)                 │
-│       └── RunPod  (15%)                     │
+│       ├── OpenRouter  (25%)                 │
+│       └── RunPod      (10%)                 │
+│                                            │
 └─────────────────────────────────────────────┘
 ```
 
