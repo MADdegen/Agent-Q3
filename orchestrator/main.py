@@ -15,7 +15,9 @@ Claude Cowork integration:
 from __future__ import annotations
 
 import asyncio
+import time
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import List, Optional
 
 import structlog
@@ -25,18 +27,19 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from .config import settings
 from .models import ChatRequest, TandemRequest
-from .router import ComputeRouter
+from .router import ComputeRouter, multi_provider
 from .cowork_ui import router as cowork_router
 from .memory.agent_memory import get_memory_store
 from .reasoning.decision_graph import get_decision_graph
 from .observability.tracing import init_tracing
 
 # Initialize
+start_time = time.time()
+logger = structlog.get_logger(__name__)
+compute = ComputeRouter()
 memory_store = get_memory_store()
 decision_graph = get_decision_graph(compute)
 tracer = init_tracing()
-logger = structlog.get_logger(__name__)
-compute = ComputeRouter()
 
 
 @asynccontextmanager
@@ -79,17 +82,20 @@ multi_agent_router = MultiAgentRouter(compute)
 
 @app.get("/health")
 async def health():
+    await multi_provider.health_check()
     return {
         "status": "ok",
         "version": "0.3.0",
-        "models": {
-            "reasoner": settings.reasoner_model,
-            "support": settings.support_model,
-            "coder": settings.coder_model,
-        },
+        "environment": settings.environment,
+        "timestamp": datetime.utcnow().isoformat(),
+        "uptime_seconds": time.time() - start_time,
         "strategy": settings.compute_strategy,
         "cowork_mcp": "/cowork/mcp",
         "memory": "/cowork/memory/recent",
+        "hf_weekly_used": multi_provider.hf_weekly_used,
+        "community_healthy": multi_provider.community_healthy,
+        "openrouter_configured": bool(settings.openrouter_api_key),
+        "runpod_serverless_configured": bool(settings.runpod_serverless_1),
     }
 
 
