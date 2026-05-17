@@ -1,0 +1,6 @@
+{
+    "recommendations": [
+        "techiecouch.docker-essentials",
+        "jeff-hykin.better-dockerfile-syntax"
+    ]
+}
