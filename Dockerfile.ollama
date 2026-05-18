@@ -1,0 +1,21 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Agent-Q3 Ollama image — model server + auto-pull on first boot.
+# Holds all 5 models hot: Kimi-VL, Hermes3, Qwen3-48B-Savant, Qwopus, Qwen3-Coder.
+# ─────────────────────────────────────────────────────────────────────────────
+FROM ollama/ollama:latest
+
+RUN apt-get update && apt-get install -y curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY scripts/pull-models.sh /pull-models.sh
+RUN chmod +x /pull-models.sh
+
+ENV OLLAMA_HOST=0.0.0.0 \
+    OLLAMA_ORIGINS="*" \
+    OLLAMA_NUM_GPU=99 \
+    OLLAMA_KEEP_ALIVE=24h \
+    OLLAMA_MAX_LOADED_MODELS=5
+
+EXPOSE 11434
+
+ENTRYPOINT ["/pull-models.sh"]

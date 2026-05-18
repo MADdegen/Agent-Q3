@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     coder_model: str    = "hf.co/DavidAU/Qwen3-48B-A4B-Savant-Commander-Distill-12X-Closed-Open-Heretic-Uncensored-GGUF:Q8_0"
     # [4] Fallback multimodal — Qwopus3.6-27B
     fallback_model: str = "hf.co/Jackrong/Qwopus3.6-27B-v1-preview-GGUF:Q8_0"
+    # [5] Dedicated coder — Qwen3-Coder-30B-A3B (3B active MoE, ~96%+ HumanEval)
+    coder_dedicated_model: str = "hf.co/Qwen/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q6_K"
 
     ollama_base_url: str = "http://localhost:11434"
 
