@@ -12,25 +12,26 @@ services:
     env_file:
       - .env
     environment:
-      # ── Primary instruct (Kimi K2.6 — 2.6B active MoE) ─────────────────────
-      REASONER_MODEL: ${REASONER_MODEL:-hf.co/unsloth/Kimi-K2.6-GGUF:Q4_K_M}
-      # ── Main multimodal (Qwen3-48B A4B active MoE) ──────────────────────────
+      # ── INSTRUCT PAIR (Kimi-VL + Hermes tandem) ──────────────────────────────
+      REASONER_MODEL: ${REASONER_MODEL:-hf.co/mradermacher/Kimi-VL-A3B-Instruct-i1-GGUF:Q4_K_M}
+      TANDEM_MODEL:   ${TANDEM_MODEL:-hermes3:8b}
+      # ── PRIMARY MULTIMODAL (Qwen3-48B A4B active MoE) ───────────────────────
       CODER_MODEL: ${CODER_MODEL:-hf.co/mradermacher/Qwen3-48B-A4B-Savant-Commander-Distill-12X-Closed-Open-Heretic-Uncensored-i1-GGUF:Q6_K}
-      # ── Fallback ─────────────────────────────────────────────────────────────
+      # ── FALLBACK MULTIMODAL ──────────────────────────────────────────────────
       FALLBACK_MODEL: ${FALLBACK_MODEL:-hf.co/Jackrong/Qwopus3.6-27B-v1-preview-GGUF:Q8_0}
       COMPUTE_STRATEGY: ${COMPUTE_STRATEGY:-round_robin}
       OLLAMA_HOST: "0.0.0.0"
       OLLAMA_ORIGINS: "*"
       OLLAMA_NUM_GPU: "99"
       OLLAMA_KEEP_ALIVE: "24h"
-      OLLAMA_MAX_LOADED_MODELS: "3"
+      OLLAMA_MAX_LOADED_MODELS: "4"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 300s  # extended — large models take time on first pull
+      start_period: 300s
     deploy:
       resources:
         reservations:
@@ -43,14 +44,15 @@ services:
     image: ghcr.io/open-webui/open-webui:main
     container_name: open-webui
     ports:
-      - "3000:8080"   # Open WebUI — access at http://<host>:3000
+      - "3000:8080"   # Open WebUI — http://<your-server-ip>:3000
     volumes:
       - open_webui_data:/app/backend/data
     environment:
       OLLAMA_BASE_URL: "http://agent-q3:11434"
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-change-me-in-env}
       ENABLE_SIGNUP: "true"
-      DEFAULT_MODELS: "hf.co/unsloth/Kimi-K2.6-GGUF:Q4_K_M"
+      # Kimi-VL as the default model shown in the UI
+      DEFAULT_MODELS: "hf.co/mradermacher/Kimi-VL-A3B-Instruct-i1-GGUF:Q4_K_M"
     depends_on:
       - agent-q3
     restart: unless-stopped
