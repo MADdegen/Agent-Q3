@@ -19,7 +19,7 @@ class Message(BaseModel):
 class ChatRequest(BaseModel):
     messages: list[Message]
     model_role: Optional[Literal["reasoner", "coder", "auto"]] = "auto"
-    force_backend: Optional[Literal["local", "huggingface", "runpod"]] = None
+    force_backend: Optional[Literal["local", "huggingface", "runpod", "openrouter"]] = None
     stream: bool = False
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int = Field(default=2048, ge=1, le=32768)

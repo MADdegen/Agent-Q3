@@ -46,6 +46,15 @@ class Settings(BaseSettings):
     openrouter_reasoner_model: str = "google/gemma-2-27b-it:free"
     openrouter_coder_model: str    = "qwen/qwen-2.5-coder-7b-instruct:free"
 
+    # ── Kimi K2 cloud monitor (always-on, outside local orchestration) ─────────
+    kimi_k2_model: str             = "moonshotai/kimi-k2"
+    kimi_k2_api_url: str           = "https://openrouter.ai/api/v1"
+    kimi_k2_poll_interval_secs: int = 30
+    monitor_targets: str           = "http://multimodal:8000,http://coder:8001,http://research:8002,http://ollama:11434"
+
+    def has_kimi_k2(self) -> bool:
+        return bool(self.openrouter_api_key)
+
     # ── Search + Research tools ───────────────────────────────────────────────
     perplexity_api_key: str        = ""
     perplexity_default_model: str  = "sonar-pro"

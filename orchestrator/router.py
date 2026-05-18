@@ -16,9 +16,10 @@ log = structlog.get_logger(__name__)
 
 
 class Backend(str, Enum):
-    LOCAL  = "local"
-    HF     = "huggingface"
-    RUNPOD = "runpod"
+    LOCAL      = "local"
+    HF         = "huggingface"
+    RUNPOD     = "runpod"
+    OPENROUTER = "openrouter"
 
 
 class BackendHealth:
@@ -43,22 +44,25 @@ class BackendHealth:
 
 
 # Maps model role → local Ollama model string
-# "reasoner" = Kimi-VL-A3B  (primary instruct + vision)
-# "tandem"   = Hermes3 8B   (reasoning partner)
-# "coder"    = Qwen3-48B-A4B (primary multimodal)
-# "fallback" = Qwopus3.6-27B (fallback multimodal)
+# "reasoner"        = Kimi-VL-A3B  (primary instruct + vision)
+# "tandem"          = Hermes3 8B   (reasoning partner)
+# "coder"           = Qwen3-48B-A4B (primary multimodal)
+# "fallback"        = Qwopus3.6-27B (fallback multimodal)
+# "coder_dedicated" = Qwen3-Coder-30B-A3B (dedicated coder service)
 LOCAL_MODEL_MAP = {
-    "reasoner": lambda: settings.reasoner_model,
-    "tandem":   lambda: settings.tandem_model,
-    "coder":    lambda: settings.coder_model,
-    "fallback": lambda: settings.fallback_model,
+    "reasoner":        lambda: settings.reasoner_model,
+    "tandem":          lambda: settings.tandem_model,
+    "coder":           lambda: settings.coder_model,
+    "fallback":        lambda: settings.fallback_model,
+    "coder_dedicated": lambda: settings.coder_dedicated_model,
 }
 
 HF_MODEL_MAP = {
-    "reasoner": lambda: settings.hf_reasoner_model,
-    "tandem":   lambda: settings.hf_reasoner_model,  # HF has no Hermes; use same reasoner
-    "coder":    lambda: settings.hf_coder_model,
-    "fallback": lambda: settings.hf_coder_model,
+    "reasoner":        lambda: settings.hf_reasoner_model,
+    "tandem":          lambda: settings.hf_reasoner_model,  # HF has no Hermes; use same reasoner
+    "coder":           lambda: settings.hf_coder_model,
+    "fallback":        lambda: settings.hf_coder_model,
+    "coder_dedicated": lambda: settings.hf_frontier_coder,
 }
 
 
@@ -71,15 +75,17 @@ class ComputeRouter:
 
     def __init__(self):
         self._health: dict[Backend, BackendHealth] = {
-            Backend.LOCAL:  BackendHealth(),
-            Backend.HF:     BackendHealth(),
-            Backend.RUNPOD: BackendHealth(),
+            Backend.LOCAL:      BackendHealth(),
+            Backend.HF:         BackendHealth(),
+            Backend.RUNPOD:     BackendHealth(),
+            Backend.OPENROUTER: BackendHealth(),
         }
         self._rr_counter: int = 0
         self._weights = {
-            Backend.LOCAL:  settings.local_weight,
-            Backend.HF:     settings.hf_weight,
-            Backend.RUNPOD: settings.runpod_weight,
+            Backend.LOCAL:      settings.local_weight,
+            Backend.HF:         settings.hf_weight,
+            Backend.RUNPOD:     settings.runpod_weight,
+            Backend.OPENROUTER: 0,  # weight=0: only used when explicitly requested
         }
         self._weighted_order: list[Backend] = self._build_weighted_order()
 
@@ -108,6 +114,8 @@ class ComputeRouter:
             return Backend.HF if self._health[Backend.HF].healthy else Backend.LOCAL
         if settings.compute_strategy == "runpod_first":
             return Backend.RUNPOD if self._health[Backend.RUNPOD].healthy else Backend.LOCAL
+        if settings.compute_strategy == "openrouter_first":
+            return Backend.OPENROUTER if self._health[Backend.OPENROUTER].healthy else Backend.LOCAL
         return self._next_backend()
 
     # ── Backend implementations ───────────────────────────────────────────────
@@ -216,6 +224,44 @@ class ComputeRouter:
             log.error("RunPod backend error", model=model, error=str(e))
             raise
 
+    async def call_openrouter(self, model: str, messages: list[dict], **kwargs) -> dict:
+        """OpenRouter cloud inference — used for frontier/cloud models."""
+        if not settings.openrouter_api_key:
+            raise RuntimeError("OPENROUTER_API_KEY not configured")
+        headers = {
+            "Authorization": f"Bearer {settings.openrouter_api_key}",
+            "HTTP-Referer": "https://github.com/MADdegen/Agent-Q3",
+            "X-Title": "Agent-Q3",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": kwargs.get("max_tokens", 2048),
+            "temperature": kwargs.get("temperature", 0.7),
+        }
+        h = self._health[Backend.OPENROUTER]
+        try:
+            async with httpx.AsyncClient(timeout=settings.request_timeout_secs) as client:
+                r = await client.post(
+                    f"{settings.openrouter_api_url}/chat/completions",
+                    headers=headers, json=payload
+                )
+                r.raise_for_status()
+                h.mark_success()
+                raw = r.json()
+                text = raw["choices"][0]["message"]["content"]
+                return {
+                    "message": {"role": "assistant", "content": text},
+                    "backend": Backend.OPENROUTER,
+                    "model": model,
+                    "usage": raw.get("usage"),
+                }
+        except Exception as e:
+            h.mark_error()
+            log.error("OpenRouter backend error", model=model, error=str(e))
+            raise
+
     # ── Main routing entry point ──────────────────────────────────────────────
 
     async def route(
@@ -248,8 +294,12 @@ class ComputeRouter:
                  model=_resolve_model(backend))
 
         # Build fallback chain: chosen backend first, then the rest
-        fallback_chain = [backend] + [b for b in [Backend.LOCAL, Backend.HF, Backend.RUNPOD]
-                                      if b != backend]
+        # OPENROUTER is excluded from automatic fallback (weight=0); only used if forced
+        _auto_backends = [Backend.LOCAL, Backend.HF, Backend.RUNPOD]
+        if backend == Backend.OPENROUTER:
+            fallback_chain = [Backend.OPENROUTER] + _auto_backends
+        else:
+            fallback_chain = [backend] + [b for b in _auto_backends if b != backend]
 
         last_err = None
         for attempt_backend in fallback_chain:
@@ -259,6 +309,8 @@ class ComputeRouter:
                     result = await self.call_local(attempt_model, messages, **kwargs)
                 elif attempt_backend == Backend.HF:
                     result = await self.call_hf(attempt_model, messages, **kwargs)
+                elif attempt_backend == Backend.OPENROUTER:
+                    result = await self.call_openrouter(attempt_model, messages, **kwargs)
                 else:
                     ep_id = (
                         settings.runpod_reasoner_endpoint_id
