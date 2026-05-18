@@ -9,8 +9,8 @@ class Settings(BaseSettings):
     reasoner_model: str = "hf.co/mradermacher/Kimi-VL-A3B-Instruct-i1-GGUF:Q4_K_M"
     # [2] Tandem instruct  — Hermes3 8B (reasoning partner alongside Kimi)
     tandem_model: str   = "hermes3:8b"
-    # [3] Primary multimodal — Qwen3-48B A4B active MoE
-    coder_model: str    = "hf.co/mradermacher/Qwen3-48B-A4B-Savant-Commander-Distill-12X-Closed-Open-Heretic-Uncensored-i1-GGUF:Q6_K"
+    # [3] Primary multimodal — Qwen3-48B A4B active MoE (DavidAU Q8_0, original publisher)
+    coder_model: str    = "hf.co/DavidAU/Qwen3-48B-A4B-Savant-Commander-Distill-12X-Closed-Open-Heretic-Uncensored-GGUF:Q8_0"
     # [4] Fallback multimodal — Qwopus3.6-27B
     fallback_model: str = "hf.co/Jackrong/Qwopus3.6-27B-v1-preview-GGUF:Q8_0"
 

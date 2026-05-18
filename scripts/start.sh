@@ -58,8 +58,8 @@ pull_model \
 
 # [3] Primary multimodal — Qwen3-48B A4B active MoE
 pull_model \
-  "${CODER_MODEL:-hf.co/mradermacher/Qwen3-48B-A4B-Savant-Commander-Distill-12X-Closed-Open-Heretic-Uncensored-i1-GGUF:Q6_K}" \
-  "Qwen3-48B-A4B Q6_K  [PRIMARY MULTIMODAL — 4B active MoE]"
+  "${CODER_MODEL:-hf.co/DavidAU/Qwen3-48B-A4B-Savant-Commander-Distill-12X-Closed-Open-Heretic-Uncensored-GGUF:Q8_0}" \
+  "Qwen3-48B-A4B Q8_0 (DavidAU)  [PRIMARY MULTIMODAL — 4B active MoE]"
 
 # [4] Fallback multimodal — Qwopus3.6-27B
 pull_model \
