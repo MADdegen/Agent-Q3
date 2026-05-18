@@ -28,6 +28,9 @@ from pydantic import BaseModel, Field
 
 from ..config import settings
 from ..router import router, Backend
+from ..memory import memory
+from ..skills import skills
+from ..plugins import plugins
 from ..models import REASONER_SYSTEM, CODER_SYSTEM, HERMES_SYSTEM
 
 # Import existing research tools

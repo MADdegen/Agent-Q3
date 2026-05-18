@@ -1,13 +1,16 @@
 version: "3.9"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Agent-Q3 — 5-container cloud stack
+# Agent-Q3 — 7-container cloud-only stack
 # ─────────────────────────────────────────────────────────────────────────────
-#  ollama       — model server, holds all 5 models hot
-#  multimodal   — :8000  Kimi-VL + Qwen3-48B-Savant + Qwopus + Hermes tandem
-#  coder        — :8001  Qwen3-Coder-30B-A3B (dedicated) + Hermes review
-#  research     — :8002  Perplexity / Exa / Tavily / Free / Polymarket / synth
-#  open-webui   — :3000  GUI talking to all backends via shared Ollama
+#  ollama       — model server, 5 local + 4 cloud models (signed-in to Ollama Cloud)
+#  redis        — shared memory layer (cache, sessions, events)
+#  mcp-bridge   — :8004  unified gateway to all MCP servers (.mcp.json)
+#  multimodal   — :8000  Kimi-VL + Qwen3-48B + Qwopus + Hermes tandem
+#  coder        — :8001  Qwen3-Coder-30B-A3B dedicated + Hermes review
+#  research     — :8002  Perplexity / Exa / Tavily / Free / Polymarket + synth
+#  monitor      — :8003  Kimi K2 always-on monitor (Ollama Cloud → OpenRouter fallback)
+#  open-webui   — :3000  GUI on shared Ollama backend
 # ─────────────────────────────────────────────────────────────────────────────
 
 x-app-base: &app-base
@@ -18,19 +21,44 @@ x-app-base: &app-base
     - .env
   environment:
     OLLAMA_BASE_URL: "http://ollama:11434"
+    REDIS_URL: "redis://redis:6379/0"
     REASONER_MODEL:        ${REASONER_MODEL:-hf.co/mradermacher/Kimi-VL-A3B-Instruct-i1-GGUF:Q4_K_M}
     TANDEM_MODEL:          ${TANDEM_MODEL:-hermes3:8b}
     CODER_MODEL:           ${CODER_MODEL:-hf.co/DavidAU/Qwen3-48B-A4B-Savant-Commander-Distill-12X-Closed-Open-Heretic-Uncensored-GGUF:Q8_0}
     FALLBACK_MODEL:        ${FALLBACK_MODEL:-hf.co/Jackrong/Qwopus3.6-27B-v1-preview-GGUF:Q8_0}
     CODER_DEDICATED_MODEL: ${CODER_DEDICATED_MODEL:-hf.co/Qwen/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q6_K}
+    KIMI_K2_MODEL:         ${KIMI_K2_MODEL:-kimi-k2:1t-cloud}
+    OLLAMA_CLOUD_ENABLED:  ${OLLAMA_CLOUD_ENABLED:-true}
+    OPENROUTER_API_KEY:    ${OPENROUTER_API_KEY:-}
     COMPUTE_STRATEGY:      ${COMPUTE_STRATEGY:-round_robin}
   depends_on:
+    redis:
+      condition: service_healthy
     ollama:
       condition: service_healthy
+  volumes:
+    - ./skills:/app/skills:ro
+    - ./plugins:/app/plugins:ro
+    - ./.mcp.json:/app/.mcp.json:ro
   restart: unless-stopped
 
 services:
-  # ── Model server ────────────────────────────────────────────────────────────
+  # ── Shared memory ──────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: agent-q3-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # ── Model server (local 5 + cloud 4) ───────────────────────────────────────
   ollama:
     build:
       context: .
@@ -40,6 +68,8 @@ services:
       - "11434:11434"
     volumes:
       - ollama_models:/root/.ollama
+      # If you have already signed in on the host, mount your device key:
+      # - ${HOME}/.ollama:/root/.ollama
     environment:
       REASONER_MODEL:        ${REASONER_MODEL:-hf.co/mradermacher/Kimi-VL-A3B-Instruct-i1-GGUF:Q4_K_M}
       TANDEM_MODEL:          ${TANDEM_MODEL:-hermes3:8b}
@@ -53,7 +83,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 10
-      start_period: 600s   # large initial pull on first boot
+      start_period: 600s
     deploy:
       resources:
         reservations:
@@ -62,7 +92,21 @@ services:
               count: all
               capabilities: [gpu]
 
-  # ── [DOCKER 1] Multimodal service ───────────────────────────────────────────
+  # ── MCP Bridge — unified gateway to every MCP server in .mcp.json ──────────
+  mcp-bridge:
+    <<: *app-base
+    container_name: agent-q3-mcp-bridge
+    ports:
+      - "8004:8004"
+    command: ["python", "-m", "uvicorn", "orchestrator.services.mcp_bridge:app",
+              "--host", "0.0.0.0", "--port", "8004", "--log-level", "info"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ── [DOCKER 1] Multimodal service ──────────────────────────────────────────
   multimodal:
     <<: *app-base
     container_name: agent-q3-multimodal
@@ -76,7 +120,7 @@ services:
       timeout: 10s
       retries: 5
 
-  # ── [DOCKER 2] Dedicated Coder service ──────────────────────────────────────
+  # ── [DOCKER 2] Dedicated Coder service ─────────────────────────────────────
   coder:
     <<: *app-base
     container_name: agent-q3-coder
@@ -90,7 +134,7 @@ services:
       timeout: 10s
       retries: 5
 
-  # ── [DOCKER 3] Deep Research / Quant / Scraping service ─────────────────────
+  # ── [DOCKER 3] Deep Research / Quant / Scraping service ────────────────────
   research:
     <<: *app-base
     container_name: agent-q3-research
@@ -104,7 +148,28 @@ services:
       timeout: 10s
       retries: 5
 
-  # ── GUI: Open WebUI ─────────────────────────────────────────────────────────
+  # ── [DOCKER 4] Kimi K2 Always-On Monitor ───────────────────────────────────
+  monitor:
+    <<: *app-base
+    container_name: agent-q3-monitor
+    ports:
+      - "8003:8003"
+    environment:
+      OLLAMA_BASE_URL: "http://ollama:11434"
+      REDIS_URL: "redis://redis:6379/0"
+      KIMI_K2_MODEL: ${KIMI_K2_MODEL:-kimi-k2:1t-cloud}
+      OLLAMA_CLOUD_ENABLED: ${OLLAMA_CLOUD_ENABLED:-true}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      MONITOR_TARGETS: "http://multimodal:8000,http://coder:8001,http://research:8002,http://mcp-bridge:8004,http://ollama:11434"
+    command: ["python", "-m", "uvicorn", "orchestrator.services.monitor:app",
+              "--host", "0.0.0.0", "--port", "8003", "--log-level", "info"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ── GUI: Open WebUI ────────────────────────────────────────────────────────
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: agent-q3-webui
@@ -126,4 +191,6 @@ volumes:
   ollama_models:
     driver: local
   open_webui_data:
+    driver: local
+  redis_data:
     driver: local

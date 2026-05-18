@@ -1,0 +1,6 @@
+{
+  "name": "example_echo",
+  "version": "1.0.0",
+  "description": "Reference plugin — proves the plugin loader works. Echoes the request payload back.",
+  "author": "Agent-Q3"
+}

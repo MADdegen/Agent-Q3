@@ -47,13 +47,27 @@ class Settings(BaseSettings):
     openrouter_coder_model: str    = "qwen/qwen-2.5-coder-7b-instruct:free"
 
     # ── Kimi K2 cloud monitor (always-on, outside local orchestration) ─────────
-    kimi_k2_model: str             = "moonshotai/kimi-k2"
+    # Primary path: Ollama Cloud (ollama signin → kimi-k2:1t-cloud)
+    # Fallback path: OpenRouter (moonshotai/kimi-k2)
+    kimi_k2_model: str             = "kimi-k2:1t-cloud"
+    kimi_k2_fallback_model: str    = "moonshotai/kimi-k2"
     kimi_k2_api_url: str           = "https://openrouter.ai/api/v1"
     kimi_k2_poll_interval_secs: int = 30
-    monitor_targets: str           = "http://multimodal:8000,http://coder:8001,http://research:8002,http://ollama:11434"
+    monitor_targets: str           = "http://multimodal:8000,http://coder:8001,http://research:8002,http://mcp-bridge:8004,http://ollama:11434"
+
+    # ── Ollama Cloud (signed-in device — gives access to *:cloud variants) ────
+    # When ollama_cloud_enabled, the router can dispatch to cloud model variants
+    # via the same local Ollama API (ollama proxies *:cloud automatically).
+    ollama_cloud_enabled: bool          = True
+    ollama_cloud_account: str           = ""   # e.g. nicholasjmcleod@gmail.com
+    ollama_cloud_device: str            = ""   # e.g. LN-8RDGA90Ultra
+    ollama_cloud_reasoner_model: str    = "gpt-oss:120b-cloud"
+    ollama_cloud_coder_model: str       = "qwen3-coder:480b-cloud"
+    ollama_cloud_deepseek_model: str    = "deepseek-v3.1:671b-cloud"
+    ollama_cloud_kimi_model: str        = "kimi-k2:1t-cloud"
 
     def has_kimi_k2(self) -> bool:
-        return bool(self.openrouter_api_key)
+        return self.ollama_cloud_enabled or bool(self.openrouter_api_key)
 
     # ── Search + Research tools ───────────────────────────────────────────────
     perplexity_api_key: str        = ""

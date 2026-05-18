@@ -27,6 +27,9 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from .config import settings
 from .router import router, Backend
+from .memory import memory
+from .skills import skills
+from .plugins import plugins
 from .models import (
     ChatRequest,
     ChatResponse,
@@ -51,7 +54,12 @@ async def lifespan(app: FastAPI):
         fallback=settings.fallback_model,
         strategy=settings.compute_strategy,
     )
+    await memory.connect()
+    skills.load()
+    plugins.discover()
+    plugins.mount_into(app)
     yield
+    await memory.close()
     log.info("Agent-Q3 shutting down")
 
 
@@ -110,7 +118,41 @@ async def root():
             "tandem":     settings.tandem_model,
             "multimodal": settings.coder_model,
             "fallback":   settings.fallback_model,
+        },
+        "loaded": {
+            "memory_backend": memory.backend,
+            "skills": [s.to_dict() for s in skills.all],
+            "plugins": [p.to_dict() for p in plugins.all],
         }
+    }
+
+
+@app.get("/v1/loaded")
+async def loaded():
+    """Full inventory of models, skills, plugins, memory, and configured MCP servers."""
+    import httpx as _httpx
+    mcp_info: dict = {"reachable": False}
+    try:
+        async with _httpx.AsyncClient(timeout=3) as client:
+            r = await client.get("http://mcp-bridge:8004/mcp/tools")
+            if r.status_code == 200:
+                mcp_info = {"reachable": True, **r.json()}
+    except Exception as e:
+        mcp_info = {"reachable": False, "error": str(e)}
+
+    return {
+        "models": {
+            "instruct":        settings.reasoner_model,
+            "tandem":          settings.tandem_model,
+            "multimodal":      settings.coder_model,
+            "fallback":        settings.fallback_model,
+            "coder_dedicated": settings.coder_dedicated_model,
+            "monitor_cloud":   settings.kimi_k2_model,
+        },
+        "memory":  {"backend": memory.backend, "alive": await memory.ping()},
+        "skills":  [s.to_dict() for s in skills.all],
+        "plugins": [p.to_dict() for p in plugins.all],
+        "mcp":     mcp_info,
     }
 
 

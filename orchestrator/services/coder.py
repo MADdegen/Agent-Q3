@@ -19,6 +19,9 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from ..config import settings
 from ..router import router, Backend, LOCAL_MODEL_MAP, HF_MODEL_MAP
+from ..memory import memory
+from ..skills import skills
+from ..plugins import plugins
 from ..models import ChatRequest, ChatResponse, CODER_SYSTEM, HERMES_SYSTEM
 
 log = structlog.get_logger(__name__)
@@ -41,7 +44,12 @@ Write correct, idiomatic, production-grade code.
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("Coder service starting", model=settings.coder_dedicated_model)
+    await memory.connect()
+    skills.load()
+    plugins.discover()
+    plugins.mount_into(app)
     yield
+    await memory.close()
     log.info("Coder service shutting down")
 
 
