@@ -48,7 +48,7 @@ echo "      Both models loaded ✓"
 # ── 4. Start Orchestrator ─────────────────────────────────────────────────────
 echo "[4/4] Launching Agent-Q3 Orchestrator on port ${PORT:-8000}..."
 cd /app
-exec python3 -m uvicorn orchestrator.main:app \
+python3 -m uvicorn orchestrator.main:app \
   --host 0.0.0.0 \
   --port "${PORT:-8000}" \
   --log-level info \

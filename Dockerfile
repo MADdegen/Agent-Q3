@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 # ── Orchestrator source ───────────────────────────────────────────────────────
 COPY orchestrator/ ./orchestrator/
+COPY config/ ./config/
 COPY scripts/start.sh /start.sh
 RUN chmod +x /start.sh
 

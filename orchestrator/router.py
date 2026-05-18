@@ -15,7 +15,7 @@ from .config import settings
 log = structlog.get_logger(__name__)
 
 
-class Backend(StrEnum):
+class Backend(str, Enum):
     LOCAL    = "local"
     HF       = "huggingface"
     RUNPOD   = "runpod"
@@ -148,40 +148,40 @@ class ComputeRouter:
         messages: list[dict],
         **kwargs
     ) -> dict:
-        """HuggingFace Inference API — chat completions compatible."""
-        if not settings.hf_token:
+        """HuggingFace Router — OpenAI-compatible chat completions endpoint."""
+        token = settings.active_hf_token()
+        if not token:
             raise RuntimeError("HF_TOKEN not configured")
         h = self._health[Backend.HF]
         headers = {
-            "Authorization": f"Bearer {settings.hf_token}",
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
         payload = {
-            "inputs": messages[-1]["content"],  # HF text-generation endpoint
-            "parameters": {
-                "max_new_tokens": kwargs.get("max_tokens", 2048),
-                "temperature": kwargs.get("temperature", 0.7),
-                "return_full_text": False,
-            }
+            "model": model_id,
+            "messages": messages,
+            "max_tokens": kwargs.get("max_tokens", 2048),
+            "temperature": kwargs.get("temperature", 0.7),
         }
         try:
             async with httpx.AsyncClient(
                 timeout=settings.request_timeout_secs
             ) as client:
                 r = await client.post(
-                    f"{settings.hf_api_url}/{model_id}",
+                    f"{settings.hf_router_url}/chat/completions",
                     headers=headers,
                     json=payload
                 )
                 r.raise_for_status()
                 h.mark_success()
                 raw = r.json()
-                # Normalise to Ollama-style response
-                text = raw[0]["generated_text"] if isinstance(raw, list) else raw.get("generated_text", "")
+                # Normalise OpenAI-format response → Ollama-style
+                text = raw["choices"][0]["message"]["content"]
                 return {
                     "message": {"role": "assistant", "content": text},
                     "backend": Backend.HF,
                     "model": model_id,
+                    "usage": raw.get("usage"),
                 }
         except Exception as e:
             h.mark_error()
