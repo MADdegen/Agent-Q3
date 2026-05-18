@@ -1,7 +1,7 @@
 """
 Compute Router — Agent-Q3
-Alternates between: Local Ollama → HuggingFace Inference → RunPod Serverless
-Strategy: weighted round-robin with live health fallback
+4-model stack: Kimi-VL (instruct) + Hermes3 (tandem) + Qwen3-48B (multimodal) + Qwopus (fallback)
+Routes across: Local Ollama → HuggingFace Router → RunPod Serverless
 """
 
 import time
@@ -16,16 +16,15 @@ log = structlog.get_logger(__name__)
 
 
 class Backend(str, Enum):
-    LOCAL    = "local"
-    HF       = "huggingface"
-    RUNPOD   = "runpod"
+    LOCAL  = "local"
+    HF     = "huggingface"
+    RUNPOD = "runpod"
 
 
 class BackendHealth:
     def __init__(self):
         self.healthy: bool = True
         self.last_check: float = 0
-        self.queue_depth: int = 0
         self.consecutive_errors: int = 0
         self.check_interval_secs: int = 15
 
@@ -43,27 +42,45 @@ class BackendHealth:
         return time.time() - self.last_check > self.check_interval_secs
 
 
+# Maps model role → local Ollama model string
+# "reasoner" = Kimi-VL-A3B  (primary instruct + vision)
+# "tandem"   = Hermes3 8B   (reasoning partner)
+# "coder"    = Qwen3-48B-A4B (primary multimodal)
+# "fallback" = Qwopus3.6-27B (fallback multimodal)
+LOCAL_MODEL_MAP = {
+    "reasoner": lambda: settings.reasoner_model,
+    "tandem":   lambda: settings.tandem_model,
+    "coder":    lambda: settings.coder_model,
+    "fallback": lambda: settings.fallback_model,
+}
+
+HF_MODEL_MAP = {
+    "reasoner": lambda: settings.hf_reasoner_model,
+    "tandem":   lambda: settings.hf_reasoner_model,  # HF has no Hermes; use same reasoner
+    "coder":    lambda: settings.hf_coder_model,
+    "fallback": lambda: settings.hf_coder_model,
+}
+
+
 class ComputeRouter:
     """
-    Routes inference requests across Local / HuggingFace / RunPod.
-    
-    Weighted round-robin by default (60/25/15 split).
-    Falls back gracefully if a backend is unhealthy or overloaded.
+    Routes inference across Local Ollama / HuggingFace Router / RunPod.
+    Supports 4 model roles: reasoner | tandem | coder | fallback.
+    Falls back gracefully through the chain if a backend is unhealthy.
     """
 
     def __init__(self):
         self._health: dict[Backend, BackendHealth] = {
-            Backend.LOCAL:   BackendHealth(),
-            Backend.HF:      BackendHealth(),
-            Backend.RUNPOD:  BackendHealth(),
+            Backend.LOCAL:  BackendHealth(),
+            Backend.HF:     BackendHealth(),
+            Backend.RUNPOD: BackendHealth(),
         }
         self._rr_counter: int = 0
         self._weights = {
-            Backend.LOCAL:   settings.local_weight,
-            Backend.HF:      settings.hf_weight,
-            Backend.RUNPOD:  settings.runpod_weight,
+            Backend.LOCAL:  settings.local_weight,
+            Backend.HF:     settings.hf_weight,
+            Backend.RUNPOD: settings.runpod_weight,
         }
-        # Build weighted list for O(1) round-robin selection
         self._weighted_order: list[Backend] = self._build_weighted_order()
 
     def _build_weighted_order(self) -> list[Backend]:
@@ -73,30 +90,14 @@ class ComputeRouter:
         return order
 
     def _next_backend(self) -> Backend:
-        """Pick next backend via weighted round-robin, skipping unhealthy ones."""
         total = len(self._weighted_order)
         for _ in range(total):
             candidate = self._weighted_order[self._rr_counter % total]
             self._rr_counter += 1
             if self._health[candidate].healthy:
                 return candidate
-        # All unhealthy → force local
         log.warning("all backends unhealthy, forcing local")
         return Backend.LOCAL
-
-    async def check_local_health(self) -> bool:
-        h = self._health[Backend.LOCAL]
-        if not h.needs_recheck():
-            return h.healthy
-        try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                r = await client.get(f"{settings.ollama_base_url}/api/tags")
-                h.healthy = r.status_code == 200
-                h.last_check = time.time()
-                return h.healthy
-        except Exception:
-            h.healthy = False
-            return False
 
     def select_backend(self, force: Backend | None = None) -> Backend:
         if force:
@@ -107,7 +108,6 @@ class ComputeRouter:
             return Backend.HF if self._health[Backend.HF].healthy else Backend.LOCAL
         if settings.compute_strategy == "runpod_first":
             return Backend.RUNPOD if self._health[Backend.RUNPOD].healthy else Backend.LOCAL
-        # Default: round_robin / load_based
         return self._next_backend()
 
     # ── Backend implementations ───────────────────────────────────────────────
@@ -119,17 +119,10 @@ class ComputeRouter:
         stream: bool = False,
         **kwargs
     ) -> dict:
-        payload = {
-            "model": model,
-            "messages": messages,
-            "stream": stream,
-            **kwargs
-        }
+        payload = {"model": model, "messages": messages, "stream": stream, **kwargs}
         h = self._health[Backend.LOCAL]
         try:
-            async with httpx.AsyncClient(
-                timeout=settings.request_timeout_secs
-            ) as client:
+            async with httpx.AsyncClient(timeout=settings.request_timeout_secs) as client:
                 r = await client.post(
                     f"{settings.ollama_base_url}/api/chat",
                     json=payload
@@ -139,7 +132,7 @@ class ComputeRouter:
                 return r.json()
         except Exception as e:
             h.mark_error()
-            log.error("local backend error", error=str(e))
+            log.error("local backend error", model=model, error=str(e))
             raise
 
     async def call_hf(
@@ -148,7 +141,7 @@ class ComputeRouter:
         messages: list[dict],
         **kwargs
     ) -> dict:
-        """HuggingFace Router — OpenAI-compatible chat completions endpoint."""
+        """HuggingFace Router — OpenAI-compatible chat completions."""
         token = settings.active_hf_token()
         if not token:
             raise RuntimeError("HF_TOKEN not configured")
@@ -164,9 +157,7 @@ class ComputeRouter:
             "temperature": kwargs.get("temperature", 0.7),
         }
         try:
-            async with httpx.AsyncClient(
-                timeout=settings.request_timeout_secs
-            ) as client:
+            async with httpx.AsyncClient(timeout=settings.request_timeout_secs) as client:
                 r = await client.post(
                     f"{settings.hf_router_url}/chat/completions",
                     headers=headers,
@@ -175,7 +166,6 @@ class ComputeRouter:
                 r.raise_for_status()
                 h.mark_success()
                 raw = r.json()
-                # Normalise OpenAI-format response → Ollama-style
                 text = raw["choices"][0]["message"]["content"]
                 return {
                     "message": {"role": "assistant", "content": text},
@@ -185,7 +175,7 @@ class ComputeRouter:
                 }
         except Exception as e:
             h.mark_error()
-            log.error("HF backend error", error=str(e))
+            log.error("HF backend error", model=model_id, error=str(e))
             raise
 
     async def call_runpod(
@@ -195,7 +185,7 @@ class ComputeRouter:
         messages: list[dict],
         **kwargs
     ) -> dict:
-        """RunPod serverless endpoint — expects an Ollama-compatible handler."""
+        """RunPod serverless — Ollama-compatible handler expected."""
         if not settings.runpod_api_key:
             raise RuntimeError("RUNPOD_API_KEY not configured")
         h = self._health[Backend.RUNPOD]
@@ -203,18 +193,9 @@ class ComputeRouter:
             "Authorization": f"Bearer {settings.runpod_api_key}",
             "Content-Type": "application/json",
         }
-        payload = {
-            "input": {
-                "model": model,
-                "messages": messages,
-                **kwargs
-            }
-        }
+        payload = {"input": {"model": model, "messages": messages, **kwargs}}
         try:
-            async with httpx.AsyncClient(
-                timeout=settings.request_timeout_secs
-            ) as client:
-                # Submit job
+            async with httpx.AsyncClient(timeout=settings.request_timeout_secs) as client:
                 r = await client.post(
                     f"{settings.runpod_api_url}/{endpoint_id}/runsync",
                     headers=headers,
@@ -225,55 +206,54 @@ class ComputeRouter:
                 data = r.json()
                 output = data.get("output", {})
                 return {
-                    "message": output.get("message", {"role": "assistant", "content": output}),
+                    "message": output.get("message", {"role": "assistant", "content": str(output)}),
                     "backend": Backend.RUNPOD,
                     "model": model,
                     "runpod_job_id": data.get("id"),
                 }
         except Exception as e:
             h.mark_error()
-            log.error("RunPod backend error", error=str(e))
+            log.error("RunPod backend error", model=model, error=str(e))
             raise
+
+    # ── Main routing entry point ──────────────────────────────────────────────
 
     async def route(
         self,
-        model_role: str,           # "reasoner" | "coder"
+        model_role: str,            # "reasoner" | "tandem" | "coder" | "fallback"
         messages: list[dict],
         force_backend: Backend | None = None,
         **kwargs
     ) -> dict:
         """
-        Main routing entry point.
-        Selects backend, maps model_role → correct model ID per backend.
-        Falls back through chain on failure.
+        Select backend → resolve model for role → call with fallback chain.
+        Role → model mapping:
+          reasoner → Kimi-VL-A3B-Instruct i1 Q4_K_M  (primary instruct/vision)
+          tandem   → Hermes3 8B                        (reasoning partner)
+          coder    → Qwen3-48B-A4B-Savant Q6_K         (primary multimodal)
+          fallback → Qwopus3.6-27B Q8_0               (fallback multimodal)
         """
+        if model_role not in LOCAL_MODEL_MAP:
+            raise ValueError(f"Unknown model_role '{model_role}'. "
+                             f"Valid: {list(LOCAL_MODEL_MAP.keys())}")
+
         backend = self.select_backend(force_backend)
 
-        # Model IDs per role per backend
-        model_map = {
-            "reasoner": {
-                Backend.LOCAL:  settings.reasoner_model,
-                Backend.HF:     settings.hf_reasoner_model,
-                Backend.RUNPOD: settings.reasoner_model,
-            },
-            "coder": {
-                Backend.LOCAL:  settings.coder_model,
-                Backend.HF:     settings.hf_coder_model,
-                Backend.RUNPOD: settings.coder_model,
-            },
-        }
-        model = model_map[model_role][backend]
+        def _resolve_model(b: Backend) -> str:
+            if b == Backend.HF:
+                return HF_MODEL_MAP[model_role]()
+            return LOCAL_MODEL_MAP[model_role]()  # LOCAL and RUNPOD use same local name
 
-        log.info("routing request", backend=backend, model=model, role=model_role)
+        log.info("routing", role=model_role, backend=backend,
+                 model=_resolve_model(backend))
 
-        fallback_chain = [backend]
-        for b in [Backend.LOCAL, Backend.HF, Backend.RUNPOD]:
-            if b not in fallback_chain:
-                fallback_chain.append(b)
+        # Build fallback chain: chosen backend first, then the rest
+        fallback_chain = [backend] + [b for b in [Backend.LOCAL, Backend.HF, Backend.RUNPOD]
+                                      if b != backend]
 
         last_err = None
         for attempt_backend in fallback_chain:
-            attempt_model = model_map[model_role][attempt_backend]
+            attempt_model = _resolve_model(attempt_backend)
             try:
                 if attempt_backend == Backend.LOCAL:
                     result = await self.call_local(attempt_model, messages, **kwargs)
@@ -282,11 +262,11 @@ class ComputeRouter:
                 else:
                     ep_id = (
                         settings.runpod_reasoner_endpoint_id
-                        if model_role == "reasoner"
+                        if model_role in ("reasoner", "tandem")
                         else settings.runpod_coder_endpoint_id
                     )
                     if not ep_id:
-                        raise RuntimeError("RunPod endpoint ID not configured")
+                        raise RuntimeError("RunPod endpoint not configured")
                     result = await self.call_runpod(ep_id, attempt_model, messages, **kwargs)
 
                 result["_backend_used"] = attempt_backend
@@ -296,11 +276,8 @@ class ComputeRouter:
 
             except Exception as e:
                 last_err = e
-                log.warning(
-                    "backend failed, trying next",
-                    failed=attempt_backend,
-                    error=str(e)
-                )
+                log.warning("backend failed, trying next",
+                            failed=attempt_backend, role=model_role, error=str(e))
                 continue
 
         raise RuntimeError(f"All backends failed for role={model_role}: {last_err}")

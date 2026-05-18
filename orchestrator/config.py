@@ -4,30 +4,32 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    # ── Local Ollama models ───────────────────────────────────────────────────
-    reasoner_model: str = "gemma4:e4b-instruct-q4_K_M"
-    coder_model: str    = "qwen3.5:4b-instruct-q4_K_M"
+    # ── Local Ollama — 4-model stack ─────────────────────────────────────────
+    # [1] Primary instruct — Kimi-VL-A3B iMatrix (vision, agent, long-ctx)
+    reasoner_model: str = "hf.co/mradermacher/Kimi-VL-A3B-Instruct-i1-GGUF:Q4_K_M"
+    # [2] Tandem instruct  — Hermes3 8B (reasoning partner alongside Kimi)
+    tandem_model: str   = "hermes3:8b"
+    # [3] Primary multimodal — Qwen3-48B A4B active MoE
+    coder_model: str    = "hf.co/mradermacher/Qwen3-48B-A4B-Savant-Commander-Distill-12X-Closed-Open-Heretic-Uncensored-i1-GGUF:Q6_K"
+    # [4] Fallback multimodal — Qwopus3.6-27B
+    fallback_model: str = "hf.co/Jackrong/Qwopus3.6-27B-v1-preview-GGUF:Q8_0"
+
     ollama_base_url: str = "http://localhost:11434"
 
-    # ── OpenWebUI gateway ─────────────────────────────────────────────────────
-    openwebui_url: str = "https://open-webui-gateway-staging.up.railway.app"
+    # ── Open WebUI ────────────────────────────────────────────────────────────
+    openwebui_url: str = "http://localhost:3000"
 
     # ── HuggingFace — 3 tokens, auto-rotate on 429 ────────────────────────────
-    # KEY: HF provides an OpenAI-compatible router at router.huggingface.co/v1
-    # This allows calling ANY HF model via the same OpenAI chat completions API.
-    # Used by both agents for frontier model access (GLM-4.5, DeepSeek-V3, Qwen-Coder etc.)
     hf_token: str          = ""
     hf_token_2: str        = ""
     hf_token_3: str        = ""
-    hf_router_url: str     = "https://router.huggingface.co/v1"   # ← from providers.ts
+    hf_router_url: str     = "https://router.huggingface.co/v1"
     hf_api_url: str        = "https://api-inference.huggingface.co/models"
     hf_chat_api_url: str   = "https://api-inference.huggingface.co/v1/chat/completions"
-    # Default models via HF Router
-    hf_reasoner_model: str = "google/gemma-4-e4b-it"
+    hf_reasoner_model: str = "moonshotai/Kimi-VL-A3B-Instruct"
     hf_coder_model: str    = "Qwen/Qwen3.5-4B-Instruct"
-    # Optional upgraded HF router models (frontier, no cost if on HF PRO)
-    hf_frontier_reasoner: str = "zai-org/GLM-4.5:fireworks-ai"           # 130B, reasoning
-    hf_frontier_coder: str    = "Qwen/Qwen3-Coder-480B-A35B-Instruct:cerebras"  # best OSS coder
+    hf_frontier_reasoner: str = "zai-org/GLM-4.5:fireworks-ai"
+    hf_frontier_coder: str    = "Qwen/Qwen3-Coder-480B-A35B-Instruct:cerebras"
 
     # ── RunPod serverless ─────────────────────────────────────────────────────
     runpod_api_key: str              = ""
@@ -42,19 +44,12 @@ class Settings(BaseSettings):
     openrouter_reasoner_model: str = "google/gemma-2-27b-it:free"
     openrouter_coder_model: str    = "qwen/qwen-2.5-coder-7b-instruct:free"
 
-    # ── Search + Research tools (both agents) ─────────────────────────────────
-    # Perplexity Sonar — deep research for Reasoner, doc lookup for Coder
-    perplexity_api_key: str = ""
-    perplexity_default_model: str = "sonar-pro"
-
-    # Exa — semantic neural search
-    exa_api_key: str = ""
-
-    # Tavily — fast news + general search
-    tavily_api_key: str = ""
-
-    # Smithery + Glama — MCP server discovery
-    smithery_api_key: str = ""
+    # ── Search + Research tools ───────────────────────────────────────────────
+    perplexity_api_key: str        = ""
+    perplexity_default_model: str  = "sonar-pro"
+    exa_api_key: str               = ""
+    tavily_api_key: str            = ""
+    smithery_api_key: str          = ""
 
     # ── Compute routing ───────────────────────────────────────────────────────
     compute_strategy: Literal[
@@ -71,11 +66,11 @@ class Settings(BaseSettings):
     redis_url: str    = ""
 
     # ── Server ────────────────────────────────────────────────────────────────
-    port: int              = 8000
-    log_level: str         = "info"
-    local_max_queue: int   = 4
-    hf_max_queue: int      = 8
-    request_timeout_secs: int = 180
+    port: int                  = 8000
+    log_level: str             = "info"
+    local_max_queue: int       = 4
+    hf_max_queue: int          = 8
+    request_timeout_secs: int  = 180
 
     class Config:
         env_file = ".env"
@@ -83,7 +78,6 @@ class Settings(BaseSettings):
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     def active_hf_token(self) -> str:
-        """First available HF token — rotates on exhaustion."""
         return self.hf_token or self.hf_token_2 or self.hf_token_3 or ""
 
     def has_runpod(self) -> bool:
