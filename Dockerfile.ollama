@@ -1,6 +1,14 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Agent-Q3 Ollama image — model server + auto-pull on first boot.
-# Holds all 5 models hot: Kimi-VL, Hermes3, Qwen3-48B-Savant, Qwopus, Qwen3-Coder.
+# Agent-Q3 Ollama Cloud Proxy
+#
+# No local GGUFs stored here. This container is a signed-in Ollama daemon
+# that proxies *:cloud model calls to ollama.com on behalf of the account.
+#
+# Auth: mount host ~/.ollama (contains id_ed25519 device key) as a volume,
+# OR run `docker exec -it agent-q3-ollama ollama signin` once after first boot.
+#
+# Account: nicholasjmcleod@gmail.com
+# Device:  LN-8RDGA90Ultra
 # ─────────────────────────────────────────────────────────────────────────────
 FROM ollama/ollama:latest
 
@@ -12,9 +20,8 @@ RUN chmod +x /pull-models.sh
 
 ENV OLLAMA_HOST=0.0.0.0 \
     OLLAMA_ORIGINS="*" \
-    OLLAMA_NUM_GPU=99 \
     OLLAMA_KEEP_ALIVE=24h \
-    OLLAMA_MAX_LOADED_MODELS=5
+    OLLAMA_MAX_LOADED_MODELS=4
 
 EXPOSE 11434
 
