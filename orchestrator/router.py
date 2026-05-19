@@ -1,7 +1,9 @@
 """
 Compute Router — Agent-Q3
-4-model stack: Kimi-VL (instruct) + Hermes3 (tandem) + Qwen3-48B (multimodal) + Qwopus (fallback)
-Routes across: Local Ollama → HuggingFace Router → RunPod Serverless
+Local GGUF stack: Kimi-VL-A3B (reasoner) + Hermes3-8B (tandem) + Qwen3-48B-Savant (coder)
+                  Qwopus3.6-27B (fallback) + Qwen3-Coder-30B-A3B (coder_dedicated)
+Monitor: kimi-k2:1t-cloud (Ollama Cloud — outside this router)
+Priority chain: Local Ollama → OpenRouter → HuggingFace → RunPod
 """
 
 import time
@@ -43,12 +45,12 @@ class BackendHealth:
         return time.time() - self.last_check > self.check_interval_secs
 
 
-# Maps model role → local Ollama model string
-# "reasoner"        = Kimi-VL-A3B  (primary instruct + vision)
-# "tandem"          = Hermes3 8B   (reasoning partner)
-# "coder"           = Qwen3-48B-A4B (primary multimodal)
-# "fallback"        = Qwopus3.6-27B (fallback multimodal)
-# "coder_dedicated" = Qwen3-Coder-30B-A3B (dedicated coder service)
+# Maps model role → local Ollama GGUF model string
+#   reasoner        Kimi-VL-A3B Q4_K_M         — primary instruct / vision / agent
+#   tandem          Hermes3 8B                  — reasoning partner / tandem stage-2
+#   coder           Qwen3-48B-A4B-Savant        — primary multimodal / tandem stage-3
+#   fallback        Qwopus3.6-27B               — fallback multimodal
+#   coder_dedicated Qwen3-Coder-30B-A3B         — dedicated coder service
 LOCAL_MODEL_MAP = {
     "reasoner":        lambda: settings.reasoner_model,
     "tandem":          lambda: settings.tandem_model,
@@ -59,18 +61,30 @@ LOCAL_MODEL_MAP = {
 
 HF_MODEL_MAP = {
     "reasoner":        lambda: settings.hf_reasoner_model,
-    "tandem":          lambda: settings.hf_reasoner_model,  # HF has no Hermes; use same reasoner
+    "tandem":          lambda: settings.hf_tandem_model,
     "coder":           lambda: settings.hf_coder_model,
     "fallback":        lambda: settings.hf_coder_model,
     "coder_dedicated": lambda: settings.hf_frontier_coder,
 }
 
+OPENROUTER_MODEL_MAP = {
+    "reasoner":        lambda: settings.openrouter_reasoner_model,
+    "tandem":          lambda: settings.openrouter_tandem_model,
+    "coder":           lambda: settings.openrouter_coder_model,
+    "fallback":        lambda: settings.openrouter_fallback_model,
+    "coder_dedicated": lambda: settings.openrouter_coder_model,
+}
+
+# cloud_priority fallback chain: LOCAL → OPENROUTER → HF → RUNPOD
+CLOUD_PRIORITY_CHAIN = [Backend.LOCAL, Backend.OPENROUTER, Backend.HF, Backend.RUNPOD]
+
 
 class ComputeRouter:
     """
-    Routes inference across Local Ollama / HuggingFace Router / RunPod.
-    Supports 4 model roles: reasoner | tandem | coder | fallback.
-    Falls back gracefully through the chain if a backend is unhealthy.
+    Routes inference across Local Ollama / OpenRouter / HuggingFace Router / RunPod.
+    Primary: 5-model local GGUF stack (pulled from HuggingFace via Ollama).
+    Fallback chain (cloud_priority): LOCAL → OPENROUTER → HF → RUNPOD.
+    Monitor (kimi-k2:1t-cloud) is handled separately in services/monitor.py.
     """
 
     def __init__(self):
@@ -85,7 +99,7 @@ class ComputeRouter:
             Backend.LOCAL:      settings.local_weight,
             Backend.HF:         settings.hf_weight,
             Backend.RUNPOD:     settings.runpod_weight,
-            Backend.OPENROUTER: 0,  # weight=0: only used when explicitly requested
+            Backend.OPENROUTER: settings.openrouter_weight,
         }
         self._weighted_order: list[Backend] = self._build_weighted_order()
 
@@ -108,6 +122,12 @@ class ComputeRouter:
     def select_backend(self, force: Backend | None = None) -> Backend:
         if force:
             return force
+        if settings.compute_strategy == "cloud_priority":
+            # Try in chain order: LOCAL → OPENROUTER → HF → RUNPOD
+            for backend in CLOUD_PRIORITY_CHAIN:
+                if self._health[backend].healthy:
+                    return backend
+            return Backend.LOCAL
         if settings.compute_strategy == "local_first":
             return Backend.LOCAL if self._health[Backend.LOCAL].healthy else Backend.HF
         if settings.compute_strategy == "hf_first":
@@ -225,7 +245,7 @@ class ComputeRouter:
             raise
 
     async def call_openrouter(self, model: str, messages: list[dict], **kwargs) -> dict:
-        """OpenRouter cloud inference — used for frontier/cloud models."""
+        """OpenRouter cloud inference — secondary compute tier."""
         if not settings.openrouter_api_key:
             raise RuntimeError("OPENROUTER_API_KEY not configured")
         headers = {
@@ -266,18 +286,22 @@ class ComputeRouter:
 
     async def route(
         self,
-        model_role: str,            # "reasoner" | "tandem" | "coder" | "fallback"
+        model_role: str,
         messages: list[dict],
         force_backend: Backend | None = None,
         **kwargs
     ) -> dict:
         """
         Select backend → resolve model for role → call with fallback chain.
-        Role → model mapping:
-          reasoner → Kimi-VL-A3B-Instruct i1 Q4_K_M  (primary instruct/vision)
-          tandem   → Hermes3 8B                        (reasoning partner)
-          coder    → Qwen3-48B-A4B-Savant Q6_K         (primary multimodal)
-          fallback → Qwopus3.6-27B Q8_0               (fallback multimodal)
+
+        Roles → local models:
+          reasoner        → Kimi-VL-A3B Q4_K_M            /v1/instruct /v1/chat
+          tandem          → Hermes3 8B                     /v1/tandem stage-2
+          coder           → Qwen3-48B-A4B-Savant           /v1/code /v1/tandem stage-3
+          fallback        → Qwopus3.6-27B                  /v1/fallback
+          coder_dedicated → Qwen3-Coder-30B-A3B            /v1/coder /v1/coder/review
+
+        Monitor (kimi-k2:1t-cloud) is NOT routed here — see services/monitor.py.
         """
         if model_role not in LOCAL_MODEL_MAP:
             raise ValueError(f"Unknown model_role '{model_role}'. "
@@ -288,18 +312,24 @@ class ComputeRouter:
         def _resolve_model(b: Backend) -> str:
             if b == Backend.HF:
                 return HF_MODEL_MAP[model_role]()
-            return LOCAL_MODEL_MAP[model_role]()  # LOCAL and RUNPOD use same local name
+            if b == Backend.OPENROUTER:
+                return OPENROUTER_MODEL_MAP[model_role]()
+            return LOCAL_MODEL_MAP[model_role]()  # LOCAL and RUNPOD use local name
 
         log.info("routing", role=model_role, backend=backend,
                  model=_resolve_model(backend))
 
-        # Build fallback chain: chosen backend first, then the rest
-        # OPENROUTER is excluded from automatic fallback (weight=0); only used if forced
-        _auto_backends = [Backend.LOCAL, Backend.HF, Backend.RUNPOD]
-        if backend == Backend.OPENROUTER:
-            fallback_chain = [Backend.OPENROUTER] + _auto_backends
+        # Fallback chain: chosen backend first, then rest of cloud_priority order
+        if settings.compute_strategy == "cloud_priority":
+            if backend in CLOUD_PRIORITY_CHAIN:
+                idx = CLOUD_PRIORITY_CHAIN.index(backend)
+                fallback_chain = CLOUD_PRIORITY_CHAIN[idx:] + CLOUD_PRIORITY_CHAIN[:idx]
+            else:
+                fallback_chain = [backend] + list(CLOUD_PRIORITY_CHAIN)
         else:
-            fallback_chain = [backend] + [b for b in _auto_backends if b != backend]
+            fallback_chain = [backend, Backend.LOCAL, Backend.OPENROUTER,
+                              Backend.HF, Backend.RUNPOD]
+            fallback_chain = list(dict.fromkeys(fallback_chain))  # dedup, preserve order
 
         last_err = None
         for attempt_backend in fallback_chain:

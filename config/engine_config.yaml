@@ -1,22 +1,20 @@
 # =============================================================================
 # engine_config.yaml — Agent-Q3 Inference Engine Configuration
-# Updated: 7-container cloud stack (2026-05-19)
 #
-# Routing chain (all 4 levels active simultaneously):
-#   PRIMARY:    Local Ollama — 5 models hot (zero cost, GPU-bound)
-#   SECONDARY:  HuggingFace Router — frontier burst (GLM-4.5, Qwen-Coder-480B)
-#   TERTIARY:   RunPod Serverless — GPU scale-out (AMPERE_16, scale-to-zero)
-#   FALLBACK:   OpenRouter — free-tier frontier
-#   CLOUD:      Ollama Cloud — via signed-in device (kimi-k2:1t, gpt-oss:120b, etc.)
-#   MONITOR:    Kimi K2 (kimi-k2:1t-cloud) — always-on, outside local router
+# Routing chain:
+#   PRIMARY:    Local Ollama — 5 local GGUFs (pulled from HuggingFace on boot)
+#   SECONDARY:  OpenRouter — cloud burst / fallback
+#   TERTIARY:   HuggingFace Router — frontier burst (GLM-4.5, Qwen-Coder-480B)
+#   QUATERNARY: RunPod Serverless — GPU scale-out (AMPERE_16, scale-to-zero)
+#   MONITOR:    kimi-k2:1t-cloud (Ollama Cloud) — always-on, outside local router
 # =============================================================================
 
-active_engine: "local"   # local | hf_router | runpod | openrouter | ollama_cloud
+active_engine: "local"   # local | openrouter | hf_router | runpod | ollama_cloud
 
-# ── Local Ollama (5-model stack) ──────────────────────────────────────────────
+# ── Local Ollama (5-model GGUF stack) ─────────────────────────────────────────
 local:
-  base_url: "http://ollama:11434"       # docker-compose internal
-  max_loaded_models: 5                  # all 5 hot simultaneously
+  base_url: "http://ollama:11434"
+  max_loaded_models: 5           # all 5 hot simultaneously
   keep_alive: "24h"
   models:
     reasoner:
@@ -55,28 +53,35 @@ local:
       services: [coder]
       endpoints: [/v1/coder, /v1/coder/review-stage1]
 
-# ── Ollama Cloud (signed-in device passthrough) ───────────────────────────────
+# ── Kimi K2 Monitor (Ollama Cloud — separate from local router) ───────────────
 # Requires: device key at /root/.ollama/id_ed25519 (mount host ~/.ollama)
 # Account: nicholasjmcleod@gmail.com / Device: LN-8RDGA90Ultra
-# Models accessed via same Ollama API — no separate endpoint needed.
+# Fallback to OpenRouter moonshotai/kimi-k2 if cloud unavailable
 ollama_cloud:
   account: "nicholasjmcleod@gmail.com"
-  device: "LN-8RDGA90Ultra"
+  device:  "LN-8RDGA90Ultra"
   models:
-    monitor: "kimi-k2:1t-cloud"              # always-on monitor (1T total, 32B active)
-    reasoner_overflow: "gpt-oss:120b-cloud"  # frontier reasoning burst
-    coder_overflow: "qwen3-coder:480b-cloud" # frontier coding burst
-    research_overflow: "deepseek-v3.1:671b-cloud"  # deep research overflow
+    monitor: "kimi-k2:1t-cloud"       # always-on monitor (1T total, 32B active)
 
-# ── HuggingFace Router ────────────────────────────────────────────────────────
+# ── OpenRouter (secondary compute) ───────────────────────────────────────────
+openrouter:
+  base_url: "https://openrouter.ai/api/v1"
+  models:
+    reasoner:         "moonshotai/kimi-k2"
+    tandem:           "openai/gpt-4o"
+    coder:            "qwen/qwen3-coder-480b-a35b-instruct"
+    fallback:         "deepseek/deepseek-chat-v3-5"
+    monitor_fallback: "moonshotai/kimi-k2"
+
+# ── HuggingFace Router (tertiary compute) ────────────────────────────────────
 hf_router:
   base_url: "https://router.huggingface.co/v1"
   models:
     reasoner:
-      model_id: "moonshotai/Kimi-VL-A3B-Instruct"
+      model_id: "moonshotai/Kimi-K2-Instruct"
       frontier: "zai-org/GLM-4.5:fireworks-ai"
     coder:
-      model_id: "Qwen/Qwen3.5-4B-Instruct"
+      model_id: "Qwen/Qwen3-Coder-480B-A35B-Instruct:cerebras"
       frontier: "Qwen/Qwen3-Coder-480B-A35B-Instruct:cerebras"
     coder_dedicated:
       model_id: "Qwen/Qwen3-Coder-480B-A35B-Instruct:cerebras"
@@ -85,9 +90,8 @@ hf_router:
     - env: HF_TOKEN_2
     - env: HF_TOKEN_3
 
-# ── RunPod Serverless ─────────────────────────────────────────────────────────
-# GPU: AMPERE_16 (RTX A4000, 16GB VRAM) — sufficient for 4B models
-# Upgrade path: AMPERE_48 (A6000) for 30B+ models if RunPod burst needed
+# ── RunPod Serverless (quaternary — GPU burst) ────────────────────────────────
+# GPU: AMPERE_16 (RTX A4000, 16GB VRAM)
 # TensorRT gate: flip tensorrt_approved only when model locked 6mo+ AND >2000 req/min
 runpod:
   api_url: "https://api.runpod.ai/v2"
@@ -106,42 +110,32 @@ runpod:
   tensorrt_approved: false
   fallback_to_vllm: true
 
-# ── OpenRouter (fallback only) ────────────────────────────────────────────────
-openrouter:
-  base_url: "https://openrouter.ai/api/v1"
-  models:
-    reasoner: "google/gemma-2-27b-it:free"
-    coder: "qwen/qwen-2.5-coder-7b-instruct:free"
-    monitor_fallback: "moonshotai/kimi-k2"
-
-# ── Routing weights (round_robin default) ─────────────────────────────────────
+# ── Routing (cloud_priority: LOCAL → OPENROUTER → HF → RUNPOD) ───────────────
 routing:
-  strategy: "round_robin"
+  strategy: "cloud_priority"
   weights:
     local:      60
-    hf_router:  25
-    runpod:     15
-    openrouter: 0    # fallback only
+    openrouter: 20
+    hf_router:  15
+    runpod:     5
 
 # ── MCP servers (.mcp.json is the authoritative registry) ────────────────────
-# See .mcp.json for full list. Active HTTP servers (bridge connects on boot):
+# Active HTTP servers (bridge connects on boot):
 #   reddit-mcp, weather-mcp, kite-trading-mcp, arxiv-mcp,
 #   smithery-search, nymbo-tools, hf-dataview, hf-model-search
-# Skipped (stdio, requires bridge subprocess pool):
-#   playwright-mcp
-# Requires container (not in compose yet):
-#   searxng-mcp
+# Skipped (stdio, requires bridge subprocess pool): playwright-mcp
+# Requires container (not in compose yet): searxng-mcp
 
 # ── Tool registry ─────────────────────────────────────────────────────────────
 tools:
   search:
-    primary: "perplexity"       # sonar-pro / sonar-deep-research
+    primary: "perplexity"
     secondary: "exa"
     tertiary: "tavily"
     fallback: "free"            # duckduckgo + jina + arxiv + wikipedia + github
   prediction_markets:
-    polymarket: true            # gamma + CLOB APIs
-    mad_gambit: true            # internal conviction market feed
+    polymarket: true
+    mad_gambit: true
   dataset_bucket:
     hf_repo: "madDegen/agent-q3"
     status: "parquet_failing"   # TODO: fix dataset generation (500 on viewer)

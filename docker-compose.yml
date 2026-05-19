@@ -1,36 +1,29 @@
 version: "3.9"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Agent-Q3 — 8-container cloud-only stack
-# ALL inference via Ollama Cloud (nicholasjmcleod@gmail.com / LN-8RDGA90Ultra)
-# No local GGUFs. No GPU required on host.
+# Agent-Q3 — 8-container stack
+# Local GGUF stack (5 models) + Kimi K2 monitor (Ollama Cloud)
+# No GPU required on host for cloud auth; GPU recommended for local GGUF inference.
 # ─────────────────────────────────────────────────────────────────────────────
 #
-#  Cloud model → role mapping:
-#    kimi-k2:1t-cloud          reasoner  /v1/instruct /v1/chat + monitor
-#    gpt-oss:120b-cloud         tandem    /v1/tandem stage-2
-#    qwen3-coder:480b-cloud     coder     /v1/code /v1/tandem stage-3 + dedicated coder
-#    deepseek-v3.1:671b-cloud   fallback  /v1/fallback + research overflow
+#  Model → role mapping (local GGUFs, pulled by Ollama on boot):
+#    Kimi-VL-A3B Q4_K_M          reasoner   /v1/instruct /v1/chat
+#    Hermes3 8B                   tandem     /v1/tandem stage-2
+#    Qwen3-48B-A4B-Savant Q8_0   coder      /v1/code /v1/tandem stage-3
+#    Qwopus3.6-27B Q8_0          fallback   /v1/fallback
+#    Qwen3-Coder-30B-A3B Q6_K    coder_ded  /v1/coder /v1/coder/review
+#    kimi-k2:1t-cloud             monitor    /v1/monitor/analyze (Ollama Cloud)
 #
 #  Containers:
-#    ollama       — Ollama Cloud proxy (signed-in, no local models)
+#    ollama       — Ollama daemon (local GGUFs + cloud auth for monitor)
 #    redis        — shared memory (cache, sessions, events)
 #    mcp-bridge   — :8004  unified MCP gateway (.mcp.json)
-#    multimodal   — :8000  kimi-k2 + gpt-oss + qwen3-coder + deepseek tandem
-#    coder        — :8001  qwen3-coder dedicated + gpt-oss review
+#    multimodal   — :8000  reasoner + tandem + coder + fallback
+#    coder        — :8001  coder_dedicated + tandem review
 #    research     — :8002  Perplexity/Exa/Tavily/Free/Polymarket + synthesis
 #    monitor      — :8003  Kimi K2 always-on monitor (kimi-k2:1t-cloud)
 #    open-webui   — :3000  GUI
 # ─────────────────────────────────────────────────────────────────────────────
-
-x-cloud-models: &cloud-models
-  REASONER_MODEL:        kimi-k2:1t-cloud
-  TANDEM_MODEL:          gpt-oss:120b-cloud
-  CODER_MODEL:           qwen3-coder:480b-cloud
-  FALLBACK_MODEL:        deepseek-v3.1:671b-cloud
-  CODER_DEDICATED_MODEL: qwen3-coder:480b-cloud
-  KIMI_K2_MODEL:         kimi-k2:1t-cloud
-  OLLAMA_CLOUD_ENABLED:  "true"
 
 x-app-base: &app-base
   build:
@@ -39,11 +32,12 @@ x-app-base: &app-base
   env_file:
     - .env
   environment:
-    <<: *cloud-models
-    OLLAMA_BASE_URL: "http://ollama:11434"
-    REDIS_URL:       "redis://redis:6379/0"
-    COMPUTE_STRATEGY: "local_first"
-    REQUEST_TIMEOUT_SECS: "300"
+    OLLAMA_BASE_URL:        "http://ollama:11434"
+    REDIS_URL:              "redis://redis:6379/0"
+    COMPUTE_STRATEGY:       "cloud_priority"
+    REQUEST_TIMEOUT_SECS:   "300"
+    KIMI_K2_MODEL:          "kimi-k2:1t-cloud"
+    OLLAMA_CLOUD_ENABLED:   "true"
   depends_on:
     redis:
       condition: service_healthy
@@ -72,10 +66,9 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # ── Ollama Cloud proxy ────────────────────────────────────────────────────────
-  # No local model storage. Device key at /root/.ollama/id_ed25519 enables
-  # *:cloud model passthrough to ollama.com.
-  # Mount your host ~/.ollama so signin carries over without re-auth each boot.
+  # ── Ollama (local GGUF inference + cloud auth for monitor) ────────────────────
+  # pull-models.sh runs on boot: pulls 5 GGUFs, checks kimi-k2:1t-cloud cloud auth.
+  # Mount host ~/.ollama so cloud signin (id_ed25519) carries over without re-auth.
   ollama:
     build:
       context: .
@@ -84,19 +77,20 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      - ~/.ollama:/root/.ollama          # device key + cloud auth — no local GGUF storage
+      - ~/.ollama:/root/.ollama          # device key for cloud auth + model cache
+      - ollama_models:/root/.ollama/models  # persistent local GGUF storage
     environment:
-      OLLAMA_HOST:             "0.0.0.0"
-      OLLAMA_ORIGINS:          "*"
-      OLLAMA_KEEP_ALIVE:       "24h"
-      OLLAMA_MAX_LOADED_MODELS: "4"      # all 4 cloud sessions hot
+      OLLAMA_HOST:              "0.0.0.0"
+      OLLAMA_ORIGINS:           "*"
+      OLLAMA_KEEP_ALIVE:        "24h"
+      OLLAMA_MAX_LOADED_MODELS: "5"      # all 5 local models hot
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:11434/"]
       interval: 15s
       timeout: 5s
       retries: 20
-      start_period: 30s                  # fast start — no local pulls needed
+      start_period: 300s                 # allow time for GGUF pulls on first boot
 
   # ── MCP Bridge ───────────────────────────────────────────────────────────────
   mcp-bridge:
@@ -161,9 +155,10 @@ services:
     ports:
       - "8003:8003"
     environment:
-      <<: *cloud-models
       OLLAMA_BASE_URL:    "http://ollama:11434"
       REDIS_URL:          "redis://redis:6379/0"
+      KIMI_K2_MODEL:      "kimi-k2:1t-cloud"
+      OLLAMA_CLOUD_ENABLED: "true"
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       MONITOR_TARGETS: "http://multimodal:8000,http://coder:8001,http://research:8002,http://mcp-bridge:8004,http://ollama:11434"
     command: ["python", "-m", "uvicorn", "orchestrator.services.monitor:app",
@@ -186,7 +181,7 @@ services:
       OLLAMA_BASE_URL:  "http://ollama:11434"
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-change-me-in-env}
       ENABLE_SIGNUP:    "true"
-      DEFAULT_MODELS:   "kimi-k2:1t-cloud"
+      DEFAULT_MODELS:   "hf.co/mradermacher/Kimi-VL-A3B-Instruct-i1-GGUF:Q4_K_M"
     depends_on:
       ollama:
         condition: service_healthy
@@ -194,6 +189,8 @@ services:
 
 volumes:
   redis_data:
+    driver: local
+  ollama_models:
     driver: local
   open_webui_data:
     driver: local

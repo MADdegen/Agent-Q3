@@ -1,14 +1,19 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Agent-Q3 Ollama Cloud Proxy
+# Agent-Q3 Ollama Container
 #
-# No local GGUFs stored here. This container is a signed-in Ollama daemon
-# that proxies *:cloud model calls to ollama.com on behalf of the account.
+# Runs pull-models.sh on boot which:
+#   1. Starts ollama serve
+#   2. Checks for cloud auth (id_ed25519 device key → kimi-k2:1t-cloud for monitor)
+#   3. Pulls 5 local GGUFs from HuggingFace:
+#        reasoner        hf.co/mradermacher/Kimi-VL-A3B-Instruct-i1-GGUF:Q4_K_M
+#        tandem          hermes3:8b
+#        coder           hf.co/DavidAU/Qwen3-48B-A4B-Savant-...-GGUF:Q8_0
+#        fallback        hf.co/Jackrong/Qwopus3.6-27B-v1-preview-GGUF:Q8_0
+#        coder_dedicated hf.co/Qwen/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q6_K
 #
-# Auth: mount host ~/.ollama (contains id_ed25519 device key) as a volume,
-# OR run `docker exec -it agent-q3-ollama ollama signin` once after first boot.
-#
-# Account: nicholasjmcleod@gmail.com
-# Device:  LN-8RDGA90Ultra
+# Auth for monitor: mount host ~/.ollama (contains id_ed25519 device key)
+#   OR run: docker exec -it agent-q3-ollama ollama signin
+#   Account: nicholasjmcleod@gmail.com / Device: LN-8RDGA90Ultra
 # ─────────────────────────────────────────────────────────────────────────────
 FROM ollama/ollama:latest
 
@@ -21,7 +26,7 @@ RUN chmod +x /pull-models.sh
 ENV OLLAMA_HOST=0.0.0.0 \
     OLLAMA_ORIGINS="*" \
     OLLAMA_KEEP_ALIVE=24h \
-    OLLAMA_MAX_LOADED_MODELS=4
+    OLLAMA_MAX_LOADED_MODELS=5
 
 EXPOSE 11434
 
