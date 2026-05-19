@@ -8,39 +8,52 @@
     "weather-mcp": {
       "type": "http",
       "url": "https://mcp-weather-j5kl.onrender.com/mcp",
-      "description": "Weather MCP (The-MDC/claude-code-multi-agent) \u2014 free hosted"
+      "description": "Weather MCP (The-MDC/claude-code-multi-agent) — free hosted"
     },
     "kite-trading-mcp": {
       "type": "http",
       "url": "https://mcp.kite.trade/mcp",
-      "description": "Kite Connect trading API \u2014 free hosted, no key for market data (MADdegen/kite-mcp-server)"
+      "description": "Kite Connect trading API — free hosted, no key for market data"
     },
     "playwright-mcp": {
       "type": "stdio",
       "command": "npx",
-      "args": [
-        "@playwright/mcp@latest"
-      ],
-      "description": "Microsoft Playwright browser automation \u2014 free, local"
+      "args": ["@playwright/mcp@latest"],
+      "description": "Microsoft Playwright browser automation — stdio, requires bridge subprocess pool"
     },
     "searxng-mcp": {
       "type": "http",
       "url": "http://searxng:8080",
-      "description": "SearXNG self-hosted meta-search (Railway internal) \u2014 aggregates 70+ engines, zero cost"
+      "description": "SearXNG self-hosted meta-search — add searxng container to docker-compose to activate"
     },
     "arxiv-mcp": {
       "type": "http",
       "url": "https://mcp.arxiv.org/mcp",
-      "description": "ArXiv academic paper search \u2014 free public API"
+      "description": "ArXiv academic paper search — free public API"
     },
     "smithery-search": {
       "type": "http",
       "url": "https://registry.smithery.ai",
-      "description": "Smithery MCP registry \u2014 dynamic tool discovery",
+      "description": "Smithery MCP registry — dynamic tool discovery",
       "auth": {
         "type": "bearer",
         "env": "SMITHERY_API_KEY"
       }
+    },
+    "nymbo-tools": {
+      "type": "http",
+      "url": "https://nymbo-tools.hf.space/gradio_api/mcp/sse",
+      "description": "Nymbo/Tools HF Space — all-in-one general purpose agent tools (51 likes). Gradio SSE MCP transport."
+    },
+    "hf-dataview": {
+      "type": "http",
+      "url": "https://efecelik-dataview-mcp.hf.space/gradio_api/mcp/sse",
+      "description": "DataView MCP — explore and analyze HuggingFace datasets (efecelik/dataview-mcp HF Space)"
+    },
+    "hf-model-search": {
+      "type": "http",
+      "url": "https://dylanebert-huggingface-mcp.hf.space/gradio_api/mcp/sse",
+      "description": "HuggingFace model search MCP — search and retrieve HF models (dylanebert/huggingface-mcp)"
     }
   }
 }

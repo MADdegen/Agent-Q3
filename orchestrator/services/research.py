@@ -9,10 +9,14 @@ Wires the existing tools/ stack into a dedicated research API:
   - Kimi-VL reasoning over results → Hermes3 synthesis → Qwen3-48B final report
 
 Endpoints:
-  POST /v1/research/deep      — multi-provider deep research (Perplexity → fallback chain)
-  POST /v1/research/scrape    — Jina Reader page extraction
-  POST /v1/research/quant     — Polymarket conviction analysis
+  POST /v1/research/deep       — multi-provider deep research (Perplexity → fallback chain)
+  POST /v1/research/scrape     — Jina Reader page extraction
+  POST /v1/research/quant      — Polymarket conviction analysis
   POST /v1/research/synthesize — full pipeline: search → Kimi reads → Hermes synthesizes → Qwen reports
+  POST /v1/research/code       — semantic code search (Exa/Tavily biased to code repos)
+  POST /v1/research/docs       — domain-scoped documentation lookup (Perplexity doc_lookup)
+  POST /v1/research/packages   — PyPI + npm package metadata + security check
+  POST /v1/research/conviction — Polymarket per-market conviction + CLOB orderbook analysis
   GET  /health
 """
 
