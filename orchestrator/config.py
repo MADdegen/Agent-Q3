@@ -4,24 +4,26 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    # ── Local Ollama model stack (5 GGUFs pulled from HuggingFace) ───────────
-    #   reasoner        Kimi-VL-A3B Q4_K_M      /v1/instruct /v1/chat (auto)
-    #   tandem          Hermes3 8B               /v1/tandem stage-2, /v1/coder/review stage-2
-    #   coder           Qwen3-48B-A4B-Savant     /v1/code, /v1/tandem stage-3
-    #   fallback        Qwopus3.6-27B            /v1/fallback
-    #   coder_dedicated Qwen3-Coder-30B-A3B      /v1/coder, /v1/coder/review stage-1
-    #   monitor         kimi-k2:1t-cloud         /v1/monitor/analyze (Ollama Cloud only)
-    reasoner_model:        str = "hf.co/mradermacher/Kimi-VL-A3B-Instruct-i1-GGUF:Q4_K_M"
-    tandem_model:          str = "hermes3:8b"
-    coder_model:           str = "hf.co/DavidAU/Qwen3-48B-A4B-Savant-Commander-Distill-12X-Closed-Open-Heretic-Uncensored-GGUF:Q8_0"
-    fallback_model:        str = "hf.co/Jackrong/Qwopus3.6-27B-v1-preview-GGUF:Q8_0"
-    coder_dedicated_model: str = "hf.co/Qwen/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q6_K"
+    # ── Ollama Cloud model stack ──────────────────────────────────────────────
+    # ALL inference via Ollama Cloud (nicholasjmcleod@gmail.com / LN-8RDGA90Ultra)
+    # No local GGUFs. Mount host ~/.ollama for device key (id_ed25519).
+    #
+    #   reasoner        kimi-vl:a3b-cloud          /v1/instruct /v1/chat
+    #   tandem          hermes3:8b-cloud            /v1/tandem stage-2
+    #   coder           qwen3:48b-a4b-cloud         /v1/code /v1/tandem stage-3
+    #   fallback        qwopus:27b-cloud            /v1/fallback
+    #   coder_dedicated qwen3-coder:30b-a3b-cloud   /v1/coder /v1/coder/review
+    #   monitor         kimi-k2:1t-cloud            /v1/monitor/analyze
+    reasoner_model:        str = "kimi-vl:a3b-cloud"
+    tandem_model:          str = "hermes3:8b-cloud"
+    coder_model:           str = "qwen3:48b-a4b-cloud"
+    fallback_model:        str = "qwopus:27b-cloud"
+    coder_dedicated_model: str = "qwen3-coder:30b-a3b-cloud"
 
     ollama_base_url: str = "http://ollama:11434"
     openwebui_url:   str = "http://localhost:3000"
 
-    # ── Ollama Cloud auth (monitor only — kimi-k2:1t-cloud) ──────────────────
-    # Mount host ~/.ollama as volume for device key (id_ed25519)
+    # ── Ollama Cloud auth ─────────────────────────────────────────────────────
     # Account: nicholasjmcleod@gmail.com / Device: LN-8RDGA90Ultra
     ollama_cloud_enabled: bool = True
     ollama_cloud_account: str  = "nicholasjmcleod@gmail.com"
@@ -41,8 +43,8 @@ class Settings(BaseSettings):
     openrouter_api_key:        str = ""
     openrouter_api_url:        str = "https://openrouter.ai/api/v1"
     openrouter_reasoner_model: str = "moonshotai/kimi-k2"
-    openrouter_coder_model:    str = "qwen/qwen3-coder-480b-a35b-instruct"
-    openrouter_tandem_model:   str = "openai/gpt-4o"
+    openrouter_coder_model:    str = "qwen/qwen3-coder-30b-a3b-instruct"
+    openrouter_tandem_model:   str = "nousresearch/hermes-3-llama-3.1-8b"
     openrouter_fallback_model: str = "deepseek/deepseek-chat-v3-5"
 
     # ── [3] HuggingFace Router — tertiary compute ─────────────────────────────
@@ -62,7 +64,7 @@ class Settings(BaseSettings):
     runpod_reasoner_endpoint_id: str = "kukl55t0053lob"
     runpod_coder_endpoint_id:    str = "kukl55t0053lob"
     runpod_api_url:              str = "https://api.runpod.ai/v2"
-    runpod_gpu_class:            str = "AMPERE_16"   # RTX A4000 16GB
+    runpod_gpu_class:            str = "AMPERE_16"
 
     # ── Search + Research tools ───────────────────────────────────────────────
     perplexity_api_key:       str = ""
@@ -72,18 +74,17 @@ class Settings(BaseSettings):
     smithery_api_key:         str = ""
 
     # ── Compute routing ───────────────────────────────────────────────────────
-    # cloud_priority = Local Ollama → OpenRouter → HuggingFace → RunPod
+    # cloud_priority = Ollama Cloud → OpenRouter → HuggingFace → RunPod
     compute_strategy: Literal[
-        "cloud_priority",       # Local Ollama → OpenRouter → HF → RunPod
+        "cloud_priority",
         "round_robin",
         "load_based",
-        "local_first",          # Ollama only, fall back to HF
+        "local_first",
         "hf_first",
         "runpod_first",
         "openrouter_first",
     ] = "cloud_priority"
 
-    # Weights used in round_robin mode only (cloud_priority ignores these)
     local_weight:      int = 60
     openrouter_weight: int = 20
     hf_weight:         int = 15

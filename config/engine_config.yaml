@@ -1,75 +1,67 @@
 # =============================================================================
 # engine_config.yaml — Agent-Q3 Inference Engine Configuration
 #
+# ALL inference via Ollama Cloud (no local GGUFs, no GPU required)
+# Account: nicholasjmcleod@gmail.com / Device: LN-8RDGA90Ultra
+#
 # Routing chain:
-#   PRIMARY:    Local Ollama — 5 local GGUFs (pulled from HuggingFace on boot)
+#   PRIMARY:    Ollama Cloud — 6 cloud sessions hot (zero local storage)
 #   SECONDARY:  OpenRouter — cloud burst / fallback
-#   TERTIARY:   HuggingFace Router — frontier burst (GLM-4.5, Qwen-Coder-480B)
+#   TERTIARY:   HuggingFace Router — frontier burst
 #   QUATERNARY: RunPod Serverless — GPU scale-out (AMPERE_16, scale-to-zero)
-#   MONITOR:    kimi-k2:1t-cloud (Ollama Cloud) — always-on, outside local router
+#   MONITOR:    kimi-k2:1t-cloud — always-on, outside main router
 # =============================================================================
 
-active_engine: "local"   # local | openrouter | hf_router | runpod | ollama_cloud
+active_engine: "ollama_cloud"
 
-# ── Local Ollama (5-model GGUF stack) ─────────────────────────────────────────
-local:
-  base_url: "http://ollama:11434"
-  max_loaded_models: 5           # all 5 hot simultaneously
-  keep_alive: "24h"
-  models:
-    reasoner:
-      tag: "hf.co/mradermacher/Kimi-VL-A3B-Instruct-i1-GGUF:Q4_K_M"
-      role: "primary instruct / vision / agent / long-ctx"
-      ctx: 128000
-      gpu_layers: 99
-      services: [multimodal]
-      endpoints: [/v1/instruct, /v1/chat, /v1/tandem-stage1]
-    tandem:
-      tag: "hermes3:8b"
-      role: "reasoning partner / tandem stage 2 / code review"
-      ctx: 8192
-      gpu_layers: 99
-      services: [multimodal, coder]
-      endpoints: [/v1/tandem-stage2, /v1/coder/review-stage2]
-    coder:
-      tag: "hf.co/DavidAU/Qwen3-48B-A4B-Savant-Commander-Distill-12X-Closed-Open-Heretic-Uncensored-GGUF:Q8_0"
-      role: "primary multimodal / tandem implementation / code"
-      ctx: 32768
-      gpu_layers: 99
-      services: [multimodal]
-      endpoints: [/v1/code, /v1/tandem-stage3]
-    fallback:
-      tag: "hf.co/Jackrong/Qwopus3.6-27B-v1-preview-GGUF:Q8_0"
-      role: "fallback multimodal when primary overloaded"
-      ctx: 32768
-      gpu_layers: 99
-      services: [multimodal]
-      endpoints: [/v1/fallback]
-    coder_dedicated:
-      tag: "hf.co/Qwen/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q6_K"
-      role: "dedicated code generation (~96%+ HumanEval, 3B active MoE)"
-      ctx: 32768
-      gpu_layers: 99
-      services: [coder]
-      endpoints: [/v1/coder, /v1/coder/review-stage1]
-
-# ── Kimi K2 Monitor (Ollama Cloud — separate from local router) ───────────────
+# ── Ollama Cloud (ALL model roles) ───────────────────────────────────────────
 # Requires: device key at /root/.ollama/id_ed25519 (mount host ~/.ollama)
 # Account: nicholasjmcleod@gmail.com / Device: LN-8RDGA90Ultra
-# Fallback to OpenRouter moonshotai/kimi-k2 if cloud unavailable
 ollama_cloud:
   account: "nicholasjmcleod@gmail.com"
   device:  "LN-8RDGA90Ultra"
+  base_url: "http://ollama:11434"
+  max_sessions: 6
+  keep_alive: "24h"
   models:
-    monitor: "kimi-k2:1t-cloud"       # always-on monitor (1T total, 32B active)
+    reasoner:
+      tag:       "kimi-vl:a3b-cloud"
+      role:      "primary instruct / vision / agent / long-ctx"
+      services:  [multimodal]
+      endpoints: [/v1/instruct, /v1/chat]
+    tandem:
+      tag:       "hermes3:8b-cloud"
+      role:      "reasoning partner / tandem stage-2 / code review"
+      services:  [multimodal, coder]
+      endpoints: [/v1/tandem-stage2, /v1/coder/review-stage2]
+    coder:
+      tag:       "qwen3:48b-a4b-cloud"
+      role:      "primary multimodal / tandem implementation / code"
+      services:  [multimodal]
+      endpoints: [/v1/code, /v1/tandem-stage3]
+    fallback:
+      tag:       "qwopus:27b-cloud"
+      role:      "fallback multimodal when primary overloaded"
+      services:  [multimodal]
+      endpoints: [/v1/fallback]
+    coder_dedicated:
+      tag:       "qwen3-coder:30b-a3b-cloud"
+      role:      "dedicated code generation (3B active MoE)"
+      services:  [coder]
+      endpoints: [/v1/coder, /v1/coder/review-stage1]
+    monitor:
+      tag:       "kimi-k2:1t-cloud"
+      role:      "always-on monitor — outside main router"
+      services:  [monitor]
+      endpoints: [/v1/monitor/analyze]
 
 # ── OpenRouter (secondary compute) ───────────────────────────────────────────
 openrouter:
   base_url: "https://openrouter.ai/api/v1"
   models:
     reasoner:         "moonshotai/kimi-k2"
-    tandem:           "openai/gpt-4o"
-    coder:            "qwen/qwen3-coder-480b-a35b-instruct"
+    tandem:           "nousresearch/hermes-3-llama-3.1-8b"
+    coder:            "qwen/qwen3-coder-30b-a3b-instruct"
     fallback:         "deepseek/deepseek-chat-v3-5"
     monitor_fallback: "moonshotai/kimi-k2"
 
@@ -77,40 +69,33 @@ openrouter:
 hf_router:
   base_url: "https://router.huggingface.co/v1"
   models:
-    reasoner:
-      model_id: "moonshotai/Kimi-K2-Instruct"
-    tandem:
-      model_id: "NousResearch/Hermes-3-Llama-3.1-8B"
-    coder:
-      model_id: "Qwen/Qwen3-Coder-30B-A3B-Instruct"
-    coder_dedicated:
-      model_id: "Qwen/Qwen3-Coder-30B-A3B-Instruct"
+    reasoner:        "moonshotai/Kimi-K2-Instruct"
+    tandem:          "NousResearch/Hermes-3-Llama-3.1-8B"
+    coder:           "Qwen/Qwen3-Coder-30B-A3B-Instruct"
+    coder_dedicated: "Qwen/Qwen3-Coder-30B-A3B-Instruct"
   token_rotation:
     - env: HF_TOKEN
     - env: HF_TOKEN_2
     - env: HF_TOKEN_3
 
 # ── RunPod Serverless (quaternary — GPU burst) ────────────────────────────────
-# GPU: AMPERE_16 (RTX A4000, 16GB VRAM)
-# TensorRT gate: flip tensorrt_approved only when model locked 6mo+ AND >2000 req/min
 runpod:
   api_url: "https://api.runpod.ai/v2"
   endpoints:
     reasoner:
-      id: "kukl55t0053lob"
-      gpu_class: "AMPERE_16"
+      id:          "kukl55t0053lob"
+      gpu_class:   "AMPERE_16"
       workers_min: 0
       workers_max: 2
-      idle_timeout_secs: 30
     coder:
-      id: "kukl55t0053lob"
-      gpu_class: "AMPERE_16"
+      id:          "kukl55t0053lob"
+      gpu_class:   "AMPERE_16"
       workers_min: 0
       workers_max: 2
   tensorrt_approved: false
-  fallback_to_vllm: true
+  fallback_to_vllm:  true
 
-# ── Routing (cloud_priority: LOCAL → OPENROUTER → HF → RUNPOD) ───────────────
+# ── Routing (cloud_priority: Ollama Cloud → OpenRouter → HF → RunPod) ────────
 routing:
   strategy: "cloud_priority"
   weights:
@@ -123,22 +108,22 @@ routing:
 # Active HTTP servers (bridge connects on boot):
 #   reddit-mcp, weather-mcp, kite-trading-mcp, arxiv-mcp,
 #   smithery-search, nymbo-tools, hf-dataview, hf-model-search
-# Skipped (stdio, requires bridge subprocess pool): playwright-mcp
+# Skipped (stdio): playwright-mcp
 # Requires container (not in compose yet): searxng-mcp
 
 # ── Tool registry ─────────────────────────────────────────────────────────────
 tools:
   search:
-    primary: "perplexity"
+    primary:   "perplexity"
     secondary: "exa"
-    tertiary: "tavily"
-    fallback: "free"            # duckduckgo + jina + arxiv + wikipedia + github
+    tertiary:  "tavily"
+    fallback:  "free"       # duckduckgo + jina + arxiv + wikipedia + github
   prediction_markets:
     polymarket: true
     mad_gambit: true
   dataset_bucket:
     hf_repo: "madDegen/agent-q3"
-    status: "parquet_failing"   # TODO: fix dataset generation (500 on viewer)
+    status:  "parquet_failing"   # TODO: fix dataset generation (500 on viewer)
     contents:
       - "hq/exports/  — Solidity, prediction markets, LangGraph JSONL"
       - "hq/feedback/ — RLHF/DPO feedback signals"

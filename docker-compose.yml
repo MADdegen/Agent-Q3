@@ -2,20 +2,20 @@ version: "3.9"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Agent-Q3 — 8-container stack
-# Local GGUF stack (5 models) + Kimi K2 monitor (Ollama Cloud)
-# No GPU required on host for cloud auth; GPU recommended for local GGUF inference.
+# ALL inference via Ollama Cloud (no local GGUFs, no GPU required)
+# Account: nicholasjmcleod@gmail.com / Device: LN-8RDGA90Ultra
 # ─────────────────────────────────────────────────────────────────────────────
 #
-#  Model → role mapping (local GGUFs, pulled by Ollama on boot):
-#    Kimi-VL-A3B Q4_K_M          reasoner   /v1/instruct /v1/chat
-#    Hermes3 8B                   tandem     /v1/tandem stage-2
-#    Qwen3-48B-A4B-Savant Q8_0   coder      /v1/code /v1/tandem stage-3
-#    Qwopus3.6-27B Q8_0          fallback   /v1/fallback
-#    Qwen3-Coder-30B-A3B Q6_K    coder_ded  /v1/coder /v1/coder/review
-#    kimi-k2:1t-cloud             monitor    /v1/monitor/analyze (Ollama Cloud)
+#  Cloud model → role mapping:
+#    kimi-vl:a3b-cloud           reasoner   /v1/instruct /v1/chat
+#    hermes3:8b-cloud            tandem     /v1/tandem stage-2
+#    qwen3:48b-a4b-cloud         coder      /v1/code /v1/tandem stage-3
+#    qwopus:27b-cloud            fallback   /v1/fallback
+#    qwen3-coder:30b-a3b-cloud   coder_ded  /v1/coder /v1/coder/review
+#    kimi-k2:1t-cloud            monitor    /v1/monitor/analyze
 #
 #  Containers:
-#    ollama       — Ollama daemon (local GGUFs + cloud auth for monitor)
+#    ollama       — Ollama Cloud proxy (signed-in, no local models)
 #    redis        — shared memory (cache, sessions, events)
 #    mcp-bridge   — :8004  unified MCP gateway (.mcp.json)
 #    multimodal   — :8000  reasoner + tandem + coder + fallback
@@ -36,8 +36,13 @@ x-app-base: &app-base
     REDIS_URL:              "redis://redis:6379/0"
     COMPUTE_STRATEGY:       "cloud_priority"
     REQUEST_TIMEOUT_SECS:   "300"
-    KIMI_K2_MODEL:          "kimi-k2:1t-cloud"
     OLLAMA_CLOUD_ENABLED:   "true"
+    REASONER_MODEL:         "kimi-vl:a3b-cloud"
+    TANDEM_MODEL:           "hermes3:8b-cloud"
+    CODER_MODEL:            "qwen3:48b-a4b-cloud"
+    FALLBACK_MODEL:         "qwopus:27b-cloud"
+    CODER_DEDICATED_MODEL:  "qwen3-coder:30b-a3b-cloud"
+    KIMI_K2_MODEL:          "kimi-k2:1t-cloud"
   depends_on:
     redis:
       condition: service_healthy
@@ -66,9 +71,9 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # ── Ollama (local GGUF inference + cloud auth for monitor) ────────────────────
-  # pull-models.sh runs on boot: pulls 5 GGUFs, checks kimi-k2:1t-cloud cloud auth.
-  # Mount host ~/.ollama so cloud signin (id_ed25519) carries over without re-auth.
+  # ── Ollama Cloud proxy ────────────────────────────────────────────────────────
+  # No local model storage. Device key at /root/.ollama/id_ed25519 enables
+  # all :cloud model passthrough to ollama.com.
   ollama:
     build:
       context: .
@@ -77,20 +82,19 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      - ~/.ollama:/root/.ollama          # device key for cloud auth + model cache
-      - ollama_models:/root/.ollama/models  # persistent local GGUF storage
+      - ~/.ollama:/root/.ollama          # device key + cloud auth — no local GGUF storage
     environment:
       OLLAMA_HOST:              "0.0.0.0"
       OLLAMA_ORIGINS:           "*"
       OLLAMA_KEEP_ALIVE:        "24h"
-      OLLAMA_MAX_LOADED_MODELS: "5"      # all 5 local models hot
+      OLLAMA_MAX_LOADED_MODELS: "6"      # all 6 cloud sessions hot
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:11434/"]
       interval: 15s
       timeout: 5s
       retries: 20
-      start_period: 300s                 # allow time for GGUF pulls on first boot
+      start_period: 30s                  # fast start — no local pulls needed
 
   # ── MCP Bridge ───────────────────────────────────────────────────────────────
   mcp-bridge:
@@ -181,7 +185,7 @@ services:
       OLLAMA_BASE_URL:  "http://ollama:11434"
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-change-me-in-env}
       ENABLE_SIGNUP:    "true"
-      DEFAULT_MODELS:   "hf.co/mradermacher/Kimi-VL-A3B-Instruct-i1-GGUF:Q4_K_M"
+      DEFAULT_MODELS:   "kimi-vl:a3b-cloud"
     depends_on:
       ollama:
         condition: service_healthy
@@ -189,8 +193,6 @@ services:
 
 volumes:
   redis_data:
-    driver: local
-  ollama_models:
     driver: local
   open_webui_data:
     driver: local
