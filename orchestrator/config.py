@@ -51,10 +51,10 @@ class Settings(BaseSettings):
     hf_token_3: str = ""
     hf_router_url:        str = "https://router.huggingface.co/v1"
     hf_reasoner_model:    str = "moonshotai/Kimi-K2-Instruct"
-    hf_coder_model:       str = "Qwen/Qwen3-Coder-480B-A35B-Instruct:cerebras"
-    hf_tandem_model:      str = "zai-org/GLM-4.5:fireworks-ai"
-    hf_frontier_reasoner: str = "zai-org/GLM-4.5:fireworks-ai"
-    hf_frontier_coder:    str = "Qwen/Qwen3-Coder-480B-A35B-Instruct:cerebras"
+    hf_tandem_model:      str = "NousResearch/Hermes-3-Llama-3.1-8B"
+    hf_coder_model:       str = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
+    hf_frontier_reasoner: str = "moonshotai/Kimi-K2-Instruct"
+    hf_frontier_coder:    str = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
 
     # ── [4] RunPod Serverless — quaternary GPU burst ──────────────────────────
     runpod_api_key:              str = ""

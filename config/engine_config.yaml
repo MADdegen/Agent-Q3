@@ -79,12 +79,12 @@ hf_router:
   models:
     reasoner:
       model_id: "moonshotai/Kimi-K2-Instruct"
-      frontier: "zai-org/GLM-4.5:fireworks-ai"
+    tandem:
+      model_id: "NousResearch/Hermes-3-Llama-3.1-8B"
     coder:
-      model_id: "Qwen/Qwen3-Coder-480B-A35B-Instruct:cerebras"
-      frontier: "Qwen/Qwen3-Coder-480B-A35B-Instruct:cerebras"
+      model_id: "Qwen/Qwen3-Coder-30B-A3B-Instruct"
     coder_dedicated:
-      model_id: "Qwen/Qwen3-Coder-480B-A35B-Instruct:cerebras"
+      model_id: "Qwen/Qwen3-Coder-30B-A3B-Instruct"
   token_rotation:
     - env: HF_TOKEN
     - env: HF_TOKEN_2
